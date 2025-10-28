@@ -1,0 +1,440 @@
+================================================================================
+PLIK: exam_ready_INSTRUCTIONS.txt
+Kompletny przewodnik krok po kroku (dla osoby bez doświadczenia w programowaniu)
+Co zrobić, aby uruchomić, przetestować i zabrać ze sobą na egzamin zestaw programów
+i narzędzi przygotowanych na podstawie przesłanego tutoriala.
+================================================================================
+
+Spis treści (skrót):
+  0) Co jest w pakiecie (co otrzymałeś)
+  1) Wymagania i instalacja narzędzi (najprostsze kroki)
+  2) Jak rozpakować / przygotować katalog roboczy
+  3) Jak skompilować programy (proste polecenia)
+  4) Lista programów i co robi każdy z nich (bardzo proste wyjaśnienia)
+  5) Jak uruchamiać programy — przykłady krok po kroku
+  6) Skrypt testowy (jak uruchomić automatyczny test)
+  7) Makefile — kompilacja wszystkiego jednym poleceniem
+  8) Co sprawdzać i jak interpretować wyniki (poradnik debugowania)
+  9) Przydatne polecenia i „ściągawka” man (co warto znać)
+ 10) Jak przygotować pliki na pendrive / wydruk
+ 11) Strategia egzaminacyjna: co zabrać i jak używać w czasie egzaminu
+ 12) Szybka checklista do odhaczania przed wejściem na salę egzaminacyjną
+
+--------------------------------------------------------------------------------
+0) Co jest w pakiecie (co otrzymałeś)
+--------------------------------------------------------------------------------
+W paczce (lub w odpowiednich plikach które przygotowaliśmy wcześniej) znajdują się:
+- util.h              (nagłówek z makrem ERR i helperami)
+- programy/fragmenty:
+  - exam_count_simple.c       (zliczanie w katalogu, non-recursive)
+  - exam_nftw_count.c         (rekursywne liczenie przy użyciu nftw)
+  - copy_lowlevel.c           (kopiowanie pliku open/read/write)
+  - copy_stdio.c              (kopiowanie fopen/fread/fwrite)
+  - make_file.c               (tworzenie pliku z ftruncate + losowe znaki)
+  - scanner_filters.c         (filtry: -p, -d, -e, -o)
+  - listing_program.c         (listing katalogu z rozmiarami)
+  - writev_example.c          (przykład użycia writev)
+  - sop-venv.c                (prosty manager wirtualnych środowisk)
+  - nftw_count.c / walk_recursive_manual.c (różne sposoby przechodzenia drzew)
+  - inne helpery: bulk_read/bulk_write, atomic_write_file, file_lock, ...
+- Makefile                 (do kompilowania wszystkiego)
+- test_scripts.sh         (skrypt uruchamiający testy)
+- exam_ready_INSTRUCTIONS.txt (ten plik — pełna instrukcja)
+
+--------------------------------------------------------------------------------
+1) Wymagania i instalacja narzędzi (najprostsze kroki)
+--------------------------------------------------------------------------------
+Potrzebujesz:
+- kompilator C: gcc (często razem z make)
+- powłoka bash (Linux / WSL / macOS — ok)
+- podstawowe narzędzia: mkdir, ls, cp, rm, ln, chmod
+
+Instalacja (przykłady):
+- Debian/Ubuntu:
+    sudo apt update
+    sudo apt install build-essential
+- Fedora:
+    sudo dnf install @development-tools
+- Arch:
+    sudo pacman -S base-devel
+- macOS (Homebrew):
+    brew install gcc make
+
+Sprawdź:
+    gcc --version
+    make --version
+
+Jeśli nie potrafisz zainstalować: zapisz pliki na pendrive i użyj komputera z Linux (np. komputer z laboratorium).
+
+--------------------------------------------------------------------------------
+2) Jak rozpakować / przygotować katalog roboczy
+--------------------------------------------------------------------------------
+1. Stwórz nowy katalog, np.:
+    mkdir exam_bundle
+    cd exam_bundle
+
+2. W tym katalogu umieść wszystkie pliki źródłowe (.c) i nagłówki (.h) tak jak w spisie.
+   Jeśli masz je w jednym pliku tekstowym — rozdziel je na pliki (edytor: nano, vim, notepad++).
+
+3. Upewnij się, że pliki są czytelne:
+    ls -l
+
+4. (Opcjonalnie) Nadaj skryptom prawa wykonywania:
+    chmod +x test_scripts.sh
+
+--------------------------------------------------------------------------------
+3) Jak skompilować programy (proste polecenia)
+--------------------------------------------------------------------------------
+Dla pojedynczego pliku (przykład exam_count_simple.c):
+    gcc -Wall -Wextra -std=c11 exam_count_simple.c -o exam_count_simple
+
+Parametry:
+- -Wall -Wextra : dodatkowe ostrzeżenia — pomocne do wychwycenia problemów
+- -std=c11 : standard języka C (możesz też użyć -std=gnu11)
+
+Kompilacja kilku plików:
+    gcc -Wall -Wextra -std=c11 copy_lowlevel.c -o copy_lowlevel
+
+Jeżeli program korzysta z _XOPEN_SOURCE (np. nftw), kompiluj z tą definicją:
+    gcc -D_XOPEN_SOURCE=700 -Wall -Wextra -std=c11 exam_nftw_count.c -o exam_nftw_count
+
+Jeśli masz Makefile (sekcja 7) — najprościej:
+    make
+
+Po skompilowaniu zobaczysz pliki wykonywalne w katalogu. Wyświetl:
+    ls -l
+
+--------------------------------------------------------------------------------
+4) Lista programów i co robi każdy z nich (wyjaśnienie „dla absolutnie początkujących”)
+--------------------------------------------------------------------------------
+(krótkie, proste opisy)
+
+- exam_count_simple
+  Co robi: patrzy do wskazanego katalogu (albo do bieżącego) i liczy:
+    ile jest zwykłych plików, ile katalogów, ile linków symbolicznych, ile „innych obiektów”.
+  Kiedy użyć: gdy egzamin prosi „policz obiekty w katalogu”.
+
+- exam_nftw_count
+  Co robi: przechodzi rekurencyjnie przez katalog i wszystkie jego podkatalogi i liczy
+  pliki, katalogi, linki i inne.
+  Kiedy użyć: gdy proszą o zliczenie całego drzewa katalogów.
+
+- copy_lowlevel
+  Co robi: kopiuje zawartość pliku z src do dst używając niskopoziomowych funkcji systemowych
+  (open/read/write).
+  Kiedy użyć: gdy proszą o napisanie kopii pliku bez użycia stdio.
+
+- copy_stdio
+  Co robi: kopiuje plik używając funkcji stdio (fopen/fread/fwrite).
+  Kiedy użyć: prostsze kopiowanie buforowane.
+
+- make_file
+  Co robi: tworzy plik o zadanej nazwie, rozmiarze i prawach. Wypełnia ~10% losowymi literami,
+  resztę zostawia jako zera. Z użyciem ftruncate, pwrite i umask.
+  Kiedy użyć: gdy trzeba utworzyć testowe pliki o określonym rozmiarze.
+
+- scanner_filters
+  Co robi: dla podanych katalogów wypisuje pliki spełniające filtry (głębokość, rozszerzenie)
+  i zapisuje wynik do pliku lub na ekran.
+  Kiedy użyć: zadanie z filtrowanym listingiem.
+
+- listing_program
+  Co robi: wypisuje (dla katalogów podanych parametrem -p) listę plików z rozmiarami.
+  Kiedy użyć: zadanie „zrób listing katalogu”.
+
+- writev_example
+  Co robi: pokazuje jak zapisać kilka fragmentów pamięci do pliku za jednym wywołaniem systemowym
+  (przydatne do zadań omawiających writev/readv).
+
+- sop-venv
+  Co robi: prosty „menadżer środowiska” (tworzenie katalogu środowiska, pliku requirements,
+  instalacja/odinstalowanie pakietów symulowane przez pliki).
+  Kiedy użyć: zadanie „symuluj instalator pakietów w wirtualnym środowisku”.
+
+- inne (helpery)
+  bulk_read/bulk_write, atomic_write_file, file_lock – małe funkcje pomocnicze,
+  które będą użyteczne do poprawnego działania programów i obsługi błędów.
+
+--------------------------------------------------------------------------------
+5) Jak uruchamiać programy — przykłady krok po kroku
+--------------------------------------------------------------------------------
+Przykład A — exam_count_simple:
+1) skompiluj:
+    gcc -Wall -Wextra -std=c11 exam_count_simple.c -o exam_count_simple
+
+2) uruchom (skanuję aktualny katalog):
+    ./exam_count_simple
+
+3) uruchom dla innego katalogu:
+    ./exam_count_simple /tmp
+
+Przykład B — exam_nftw_count:
+1) skompiluj:
+    gcc -D_XOPEN_SOURCE=700 -Wall -Wextra -std=c11 exam_nftw_count.c -o exam_nftw_count
+
+2) uruchom dla katalogu:
+    ./exam_nftw_count testdir
+
+Przykład C — make_file:
+1) skompiluj:
+    gcc -Wall -Wextra -std=c11 make_file.c -o make_file
+
+2) utwórz plik 5000 bajtów, z uprawnieniami 0644:
+    ./make_file -n sample.bin -p 0644 -s 5000
+
+3) sprawdź rozmiar:
+    ls -l sample.bin
+
+Przykład D — copy_lowlevel:
+1) skompiluj:
+    gcc -Wall -Wextra -std=c11 copy_lowlevel.c -o copy_lowlevel
+
+2) uruchom:
+    ./copy_lowlevel sample.bin sample.copy
+3) porównaj:
+    cmp sample.bin sample.copy && echo "Pliki identyczne" || echo "Pliki różne"
+
+Przykład E — sop-venv:
+1) kompiluj:
+    gcc -Wall -Wextra -std=c11 sop-venv.c -o sop-venv
+
+2) stwórz środowisko:
+    ./sop-venv -c -v myenv
+
+3) zainstaluj pakiet:
+    ./sop-venv -v myenv -i numpy==1.0.0
+
+4) sprawdź plik requirements:
+    cat myenv/requirements
+
+--------------------------------------------------------------------------------
+6) Skrypt testowy (uruchamia zestaw testów automatycznie)
+--------------------------------------------------------------------------------
+Zapisz poniższy skrypt do pliku test_scripts.sh i nadaj prawa wykonywania (chmod +x):
+
+--- test_scripts.sh START ---
+#!/bin/sh
+set -e
+echo "Tworzenie testdir..."
+rm -rf testdir; mkdir -p testdir/sub
+echo "a" > testdir/f1.txt
+echo "b" > testdir/sub/f2.txt
+ln -s f1.txt testdir/link1
+truncate -s 1024 testdir/big.bin
+
+echo "Kompilacja programów..."
+gcc -Wall -Wextra -std=c11 exam_count_simple.c -o exam_count_simple
+gcc -D_XOPEN_SOURCE=700 -Wall -Wextra -std=c11 exam_nftw_count.c -o exam_nftw_count
+gcc -Wall -Wextra -std=c11 copy_lowlevel.c -o copy_lowlevel
+gcc -Wall -Wextra -std=c11 make_file.c -o make_file
+gcc -D_XOPEN_SOURCE=700 -Wall -Wextra -std=c11 scanner_filters.c -o scanner_filters
+gcc -Wall -Wextra -std=c11 sop-venv.c -o sop-venv
+gcc -Wall -Wextra -std=c11 writev_example.c -o writev_example
+
+echo "Test: exam_count_simple"
+./exam_count_simple testdir || echo "exam_count_simple failed"
+
+echo "Test: exam_nftw_count"
+./exam_nftw_count testdir || echo "exam_nftw_count failed"
+
+echo "Test: make_file"
+./make_file -n sample.bin -p 0644 -s 2000 || echo "make_file failed"
+ls -l sample.bin
+
+echo "Test: copy_lowlevel"
+./copy_lowlevel sample.bin sample.copy || echo "copy_lowlevel failed"
+cmp sample.bin sample.copy && echo "copy ok" || echo "copy differs"
+
+echo "Test: scanner_filters"
+./scanner_filters -p testdir -d 2 -e txt -o listing.txt || echo "scanner_filters failed"
+cat listing.txt || true
+
+echo "Test: sop-venv"
+./sop-venv -c -v myenv || echo "create env failed"
+./sop-venv -v myenv -i pkg==0.1 || echo "install failed"
+cat myenv/requirements || true
+./sop-venv -v myenv -r pkg || echo "remove failed"
+
+echo "Wszystkie testy wykonane (sprawdź powyższe wyjścia)."
+--- test_scripts.sh END ---
+
+Uruchom:
+    chmod +x test_scripts.sh
+    ./test_scripts.sh
+
+Skrypt skompiluje podstawowe programy i uruchomi testy — nie wykonuje operacji destrukcyjnych poza katalogiem testdir i plikami sample.bin, sample.copy, myenv.
+
+--------------------------------------------------------------------------------
+7) Makefile — kompilacja wszystkiego jednym poleceniem
+--------------------------------------------------------------------------------
+Stwórz plik Makefile z poniższą zawartością. Następnie wywołaj po prostu "make":
+
+--- Makefile START ---
+CC = gcc
+CFLAGS = -Wall -Wextra -std=c11
+XOPEN = -D_XOPEN_SOURCE=700
+
+all: exam_count_simple exam_nftw_count copy_lowlevel make_file scanner_filters sop-venv writev_example
+
+exam_count_simple: exam_count_simple.c util.h
+	$(CC) $(CFLAGS) exam_count_simple.c -o exam_count_simple
+
+exam_nftw_count: exam_nftw_count.c util.h
+	$(CC) $(CFLAGS) $(XOPEN) exam_nftw_count.c -o exam_nftw_count
+
+copy_lowlevel: copy_lowlevel.c util.h
+	$(CC) $(CFLAGS) copy_lowlevel.c -o copy_lowlevel
+
+make_file: make_file.c util.h
+	$(CC) $(CFLAGS) make_file.c -o make_file
+
+scanner_filters: scanner_filters.c util.h
+	$(CC) $(CFLAGS) $(XOPEN) scanner_filters.c -o scanner_filters
+
+sop-venv: sop-venv.c util.h
+	$(CC) $(CFLAGS) sop-venv.c -o sop-venv
+
+writev_example: writev_example.c util.h
+	$(CC) $(CFLAGS) writev_example.c -o writev_example
+
+clean:
+	rm -f exam_count_simple exam_nftw_count copy_lowlevel make_file scanner_filters sop-venv writev_example sample.bin sample.copy myenv listing.txt
+
+.PHONY: all clean
+--- Makefile END ---
+
+Użycie:
+    make
+    make clean
+
+--------------------------------------------------------------------------------
+8) Co sprawdzać i jak interpretować wyniki (poradnik debugowania — krok po kroku)
+--------------------------------------------------------------------------------
+Jeśli coś nie działa, wykonaj następująco:
+
+Krok 1: Sprawdź czy plik wykonywalny istnieje:
+    ls -l exam_count_simple
+
+Krok 2: Uruchom program i przeczytaj komunikat błędu (jeśli się pojawi). Jeśli błędy to "undefined reference" lub "musi znajdować się X", to:
+ - upewnij się, że plik źródłowy zawiera deklaracje/funkcje z których korzysta
+ - sprawdź, czy dołączasz util.h jeśli program go używa
+
+Krok 3: Jeśli program się kompiluje ale zwraca błąd w czasie działania (ERROR):
+ - spojrzyj na linię w komunikacie błędu (makro ERR wypisuje plik i numer linii)
+ - odczytaj co było wypisane przez perror (np. "Permission denied", "No such file or directory")
+ - najczęstsze błędy: brak uprawnień (brak chmod), nieistniejący katalog, niepoprawna ścieżka
+
+Krok 4: Jeśli program się zawiesza:
+ - najczęściej czekanie na I/O (np. read), sprawdź czy program oczekuje danych
+ - przerwij Ctrl+C i uruchom ponownie z innymi argumentami testowymi
+
+Krok 5: Porównanie plików:
+ - cmp file1 file2 (zwraca 0 jeśli identyczne)
+ - hexdump -C file | less aby zobaczyć zawartość binarną (użyteczne dla make_file)
+
+Krok 6: Weryfikacja rozmiaru:
+ - ls -l file  (pokazuje rozmiar w bajtach)
+ - stat file   (pokazuje metadane pliku)
+
+Jeśli nadal nie działa: skopiuj błąd (zrzut ekranu lub skopiowany tekst) i zapisz do pliku error.txt, następnie porównaj z dokumentacją funkcji w man (np. man 2 open).
+
+--------------------------------------------------------------------------------
+9) Przydatne polecenia i „ściągawka” man (co warto znać / otworzyć)
+--------------------------------------------------------------------------------
+- man opendir
+- man readdir
+- man dirent.h
+- man stat
+- man lstat
+- man nftw
+- man getcwd
+- man chdir
+- man open
+- man read
+- man write
+- man fopen
+- man fread
+- man fwrite
+- man ftruncate
+- man pwrite
+- man mkstemp
+- man writev
+- man readv
+- man flock
+- man fcntl
+- man utimensat
+- man scandir
+
+Polecenia pomocnicze:
+- pwd           (pokazuje ścieżkę bieżącego katalogu)
+- file filename (określa typ pliku)
+- ls -l         (lista z prawami i rozmiarami)
+- stat filename (szczegółowe metadane pliku)
+- realpath file (absolutna ścieżka)
+
+--------------------------------------------------------------------------------
+10) Jak przygotować pliki na pendrive / wydruk
+--------------------------------------------------------------------------------
+Aby skopiować katalog z wszystkimi plikami źródłowymi:
+1) Podłącz pendrive — znajdź punkt montowania (np. /media/username/USB).
+2) Skopiuj:
+    cp -r exam_bundle /media/username/USB/
+3) Upewnij się, że pliki się skopiowały:
+    ls -l /media/username/USB/exam_bundle
+
+Do wydruku:
+- Otwórz exam_ready_INSTRUCTIONS.txt w edytorze i wydrukuj.
+- Możesz też wygenerować PDF z terminala:
+    enscript -p out.ps exam_ready_INSTRUCTIONS.txt && ps2pdf out.ps exam_ready.pdf
+
+--------------------------------------------------------------------------------
+11) Strategia egzaminacyjna: co zabrać i jak używać w czasie egzaminu
+--------------------------------------------------------------------------------
+- Na egzamin: pendrive z katalogiem exam_bundle i instrukcją, lub wydruk egzamin_ready_INSTRUCTIONS.txt.
+- Przy starcie egzaminu:
+  1) jeśli dozwolone — skopiuj katalog na maszynę egzaminacyjną:
+       cp -r /media/usb/exam_bundle ~/
+       cd ~/exam_bundle
+  2) Uruchom `make` (jeśli jest Makefile) lub skompiluj tylko to co potrzebne (np. exam_count_simple)
+  3) Przeczytaj uważnie treść zadania — zidentyfikuj czy potrzebujesz:
+       - non-recursive scan -> użyj exam_count_simple
+       - recursive scan -> użyj exam_nftw_count lub walk_recursive_manual
+       - kopiowanie -> copy_lowlevel lub copy_stdio
+       - tworzenie pliku o rozmiarze -> make_file
+       - manager venv -> sop-venv
+  4) Jeśli musisz zmienić kod (np. dostosować format wyjścia), edytuj odpowiedni plik i skompiluj ponownie:
+       nano exam_count_simple.c
+       gcc -Wall -std=c11 exam_count_simple.c -o exam_count_simple
+  5) Testuj na małych przykładach lokalnie (stwórz testdir jak w skrypcie)
+  6) Wyłącz debugowe printf lub wypisz je na stderr (fprintf(stderr, ...)), aby nie mieszać wyniku.
+
+- Częste formaty wymagań egzaminacyjnych:
+  - „wypisz: path: X, file size” — użyj listing_program lub scanner_filters z -o stdout.
+  - „zlicz bez rekurencji” — exam_count_simple
+  - „zlicz z rekurencją” — nftw_count_wrapper / exam_nftw_count
+
+--------------------------------------------------------------------------------
+12) Szybka checklista do odhaczania przed wejściem na salę egzaminacyjną
+--------------------------------------------------------------------------------
+[ ] mam pendrive z katalogiem exam_bundle
+[ ] mam wydruk exam_ready_INSTRUCTIONS.txt (1 strona)
+[ ] przetestowałem make i test_scripts.sh na komputerze domowym
+[ ] potrafię szybko:
+      - skompilować pojedynczy plik (gcc ...)
+      - uruchomić program z argumentami
+      - sprawdzić rozmiar pliku (ls -l)
+      - porównać pliki (cmp)
+[ ] wiem, który program z mojego zestawu odpowiada za zadanie (patrz lista w sekcji 4)
+[ ] mam przygotowane notatki: stat vs lstat, ftruncate, pwrite, TEMP_FAILURE_RETRY, nftw flags
+[ ] mam skrypt test_scripts.sh gotowy do uruchomienia
+
+--------------------------------------------------------------------------------
+KONIEC PLIKU exam_ready_INSTRUCTIONS.txt
+--------------------------------------------------------------------------------
+Jeśli chcesz, mogę natychmiast:
+ - a) wygenerować wersję tego pliku w formacie gotowym do pobrania (np. exam_ready_INSTRUCTIONS.txt),
+ - b) wygenerować skondensowaną 1-stronnicową ściągawkę (cheatsheet.txt),
+ - c) spakować wszystko do jednego pliku archiwum (tar.gz) gotowego do skopiowania na pendrive.
+
+Wybierz (napisz "a", "b", "c" lub "wszystko") a ja od razu wkleję zawartość plików (np. skrypt test_scripts.sh i Makefile) w tej rozmowie, żebyś mógł je skopiować i wkleić lokalnie.
+(Jeśli nic nie napiszesz, poczekam na Twoje dalsze polecenia — ale wszystko co potrzebne masz już w tym pliku.)
