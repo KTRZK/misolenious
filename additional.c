@@ -452,7 +452,230 @@ int main(int argc, char **argv) {
 }
 
 
+
+/* === robust_main_template.c ===
+ * Safe program template: argument handling, logging, exit codes.
+ * gcc -Wall -Wextra -std=c11 robust_main_template.c -o robust_main_template
+ */
+#include "util.h"
+#include <getopt.h>
+
+void usage(const char *p) {
+    fprintf(stderr, "Usage: %s -i input -o output [-v]\n", p);
+    fprintf(stderr, "  -i --input   path to input\n  fprintf(stderr, "  -o --output  path to output\n  ");
+    exit(EXIT_FAILURE);
+}
+
+int main(int argc, char **argv) {
+    char *input = NULL, *output = NULL;
+    int verbose = 0;
+    int opt;
+    while ((opt = getopt(argc, argv, "i:o:v")) != -1) {
+        switch (opt) {
+        case 'i': input = optarg; break;
+        case 'o': output = optarg; break;
+        case 'v': verbose = 1; break;
+        default: usage(argv[0]);
+        }
+    }
+    if (!input || !output) usage(argv[0]);
+
+    if (verbose) fprintf(stderr, "DEBUG: input=%s output=%s\n", input, output);
+
+    /* ---- main logic skeleton ---- */
+    /* jeśli błąd: ERR("somecall"); */
+
+    return EXIT_SUCCESS;
+}
+
+
+
+/* === signal_cleanup.c ===
+ * Example: register handlers to cleanup on Ctrl+C or termination.
+ * gcc -Wall -Wextra -std=c11 signal_cleanup.c -o signal_cleanup
+ */
+#include "util.h"
+#include <signal.h>
+#include <unistd.h>
+
+static volatile sig_atomic_t stop_flag = 0;
+static char tmpfile[1024] = "/tmp/exam_temp_file.xxx";
+
+void cleanup(void) {
+    /* usuń pliki tymczasowe, przywróć stan */
+    unlink(tmpfile);
+    fprintf(stderr, "cleanup done\n");
+}
+
+void handler(int sig) {
+    (void)sig;
+    stop_flag = 1;
+    /* nie wolno robić zbyt wiele w handlerze */
+}
+
+int main(void) {
+    struct sigaction sa = {0};
+    sa.sa_handler = handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    if (sigaction(SIGINT, &sa, NULL) == -1) ERR("sigaction");
+    if (sigaction(SIGTERM, &sa, NULL) == -1) ERR("sigaction");
+
+    /* rejestruj cleanup aby wykonał się przy normalnym exit */
+    if (atexit(cleanup) != 0) ERR("atexit");
+
+    /* przykład pętli */
+    while (!stop_flag) {
+        sleep(1);
+    }
+
+    fprintf(stderr, "Received stop, exiting safely\n");
+    return EXIT_SUCCESS;
+}
+
+
+/* logger.h */
+#ifndef LOGGER_H
+#define LOGGER_H
+#include <stdio.h>
+enum { LOG_ERROR=0, LOG_WARN=1, LOG_INFO=2, LOG_DEBUG=3 };
+void log_set_level(int level);
+void log_msg(int level, const char *fmt, ...);
+#endif
+
+
+/* logger.h */
+#ifndef LOGGER_H
+#define LOGGER_H
+#include <stdio.h>
+enum { LOG_ERROR=0, LOG_WARN=1, LOG_INFO=2, LOG_DEBUG=3 };
+void log_set_level(int level);
+void log_msg(int level, const char *fmt, ...);
+#endif
+
+
+/* logger.c */
+#include "logger.h"
+#include <stdarg.h>
+#include <time.h>
+
+static int log_level = LOG_INFO;
+
+void log_set_level(int level) { log_level = level; }
+
+void log_msg(int level, const char *fmt, ...) {
+    if (level > log_level) return;
+    const char *labels[] = {"ERROR","WARN","INFO","DEBUG"};
+    time_t t = time(NULL);
+    char ts[32]; strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", localtime(&t));
+    fprintf(stderr, "[%s] %s: ", ts, labels[level]);
+    va_list ap; va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fputc('\n', stderr);
+}
+
+
 /*
-Kompilacja
+generate_tree.ssh - skrypt do stres testów
+uruchmienie:
+chmod +x generate_tree.sh && ./generate_tree.sh test_big 4 6 20
+ */
+#!/bin/sh
+# === generate_tree.sh ===
+# usage: ./generate_tree.sh base_dir depth breadth files_per_dir
+base=${1:-test_big}
+depth=${2:-3}
+breadth=${3:-4}
+files=${4:-10}
+rm -rf "$base"
+mkdir -p "$base"
+# recursive create
+create_level() {
+    local dir=$1
+    local d=$2
+    if [ "$d" -le 0 ]; then
+      for i in $(seq 1 $files); do
+          dd if=/dev/urandom bs=1 count=100 status=none of="$dir/file_$i.bin"
+        done
+        return
+      fi
+      for i in $(seq 1 $breadth); do
+          nd="$dir/dir_$i"
+          mkdir -p "$nd"
+          # some files
+          for j in $(seq 1 $files); do
+              echo "file ${i}_${j}" > "$nd/f_${j}.txt"
+            done
+            # maybe a symlink
+            ln -s ../f_1.txt "$nd/link_to_parent_f1" 2>/dev/null || true
+            create_level "$nd" $((d-1))
+          done
+        }
+create_level "$base" "$depth"
+echo "Generated tree in $base"
+
+/*
+wkrywanie wyciekó pamięci run_valgrid.sh
+ */
+#!/bin/sh
+# usage: ./run_valgrind.sh ./your_program args...
+prog="$1"; shift
+if ! command -v valgrind >/dev/null; then echo "Install valgrind to use this script"; exit 1; fi
+valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=2 "$prog" "$@"
+
+/*
+bezpieczne łączenie ścierzek
+ */
+/* safe_path_join.c - implement for reuse */
+#include "util.h"
+#include <limits.h>
+
+int safe_path_join(const char *a, const char *b, char *out, size_t out_sz) {
+#ifdef PATH_MAX
+    size_t maxp = PATH_MAX;
+#else
+    size_t maxp = 4096;
+#endif
+    if (snprintf(out, out_sz, "%s/%s", a, b) >= (int)out_sz) return -1;
+    if (strlen(out) > maxp) return -1;
+    return 0;
+}
+
+/*
+8) argparse_long.c — przykład getopt_long z ładnym helpem
+
+Przydatne gdy zadanie wymaga wielu opcji.
+ */
+/* === argparse_long.c ===
+ * Example for getopt_long usage.
+ * gcc -Wall -Wextra -std=c11 argparse_long.c -o argparse_long
+ */
+#include "util.h"
+#include <getopt.h>
+
+int main(int argc, char **argv) {
+    static struct option longopts[] = {
+        {"path", required_argument, NULL, 'p'},
+        {"depth", required_argument, NULL, 'd'},
+        {"output", required_argument, NULL, 'o'},
+        {"help", no_argument, NULL, 'h'},
+        {0,0,0,0}
+    };
+    int c; char *path=NULL; int depth=-1; char *out=NULL;
+    while ((c = getopt_long(argc, argv, "p:d:o:h", longopts, NULL)) != -1) {
+        switch (c) {
+        case 'p': path = optarg; break;
+        case 'd': depth = atoi(optarg); break;
+        case 'o': out = optarg; break;
+        case 'h': fprintf(stderr, "Usage: ...\n"); return 0;
+        default: break;
+        }
+    }
+    fprintf(stderr, "Got: path=%s depth=%d out=%s\n", path?path:"(null)", depth, out?out:"(null)");
+    return 0;
+}
+
+/*
 
  */
