@@ -1,0 +1,10 @@
+Cheatsheet:
+opendir/readdir + lstat -> list directory entries (lstat for links)
+stat vs lstat: lstat returns info about the link itself
+nftw(path, fn, fd_limit, flags) -> recursive tree walking
+fopen/fread/fwrite -> buffered IO
+open/read/write -> low-level unbuffered IO
+ftruncate -> set file size
+pwrite/pread -> random-access IO without changing file offset
+TEMP_FAILURE_RETRY -> retry on EINTR
+atomic write: mkstemp -> write -> rename
