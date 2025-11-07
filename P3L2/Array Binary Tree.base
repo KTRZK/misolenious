@@ -1,0 +1,307 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+
+// EXAM_VARIANT: ArrayBinaryTree.Base
+// Base array-backed binary tree implementation with EXAM_CONFIG markers for quick edits.
+// NOTE: If you already have a working solution for this exercise, treat this file as an
+// enhanced template: it contains a robust default implementation plus clearly marked
+// places (EXAM_CONFIG / EXAM_TODO) where you can change behavior quickly during the exam.
+
+namespace ExamMaterials.DataStructures
+{
+    public interface IArrayBinaryTree<T> : IEnumerable<T>
+    {
+        int Count { get; }
+        int RootIndex { get; }
+        void SetRoot(T value);
+        (int leftIndex, int rightIndex) GetChildrenIndices(int parentIndex);
+        void SetLeftChild(int parentIndex, T value);
+        void SetRightChild(int parentIndex, T value);
+        T this[int index] { get; }
+        bool Exists(int index);
+        void Clear();
+    }
+
+    public class ArrayBinaryTree<T> : IArrayBinaryTree<T>
+    {
+        /* EXAM_CONFIG: quick toggles for exam-time behaviour */
+        // Indexing base: 0-based (standard). Set to 1 for 1-based indexing variants.
+        public const int IndexBase = 0; // EXAM_CONFIG: change to 1 if needed
+
+        // Resize strategy: "Double" (fast amortized) or "Exact" (resize to required index+1)
+        public enum ResizeStrategy { Double, Exact }
+        public const ResizeStrategy ResizeMode = ResizeStrategy.Double; // EXAM_CONFIG
+
+        // Behavior when adding child to non-existing parent: Throw or AutoCreateParent
+        public enum MissingParentBehavior { Throw, AutoCreate }
+        public const MissingParentBehavior ParentBehavior = MissingParentBehavior.Throw; // EXAM_CONFIG
+
+        // Internal storage
+        private T[] _nodes;
+        private bool[] _exists; // tracks which indexes contain valid nodes
+        public int Count { get; private set; }
+
+        // Root index constant (calculated from IndexBase). Exposed as property for use by iterator.
+        public int RootIndex => IndexBase;
+
+        public ArrayBinaryTree(int initialCapacity = 0)
+        {
+            _nodes = initialCapacity > 0 ? new T[initialCapacity] : Array.Empty<T>();
+            _exists = initialCapacity > 0 ? new bool[initialCapacity] : Array.Empty<bool>();
+            Count = 0;
+        }
+
+        #region Helpers
+        private static long LeftIndexLong(long parentIndex) => 2 * parentIndex + 1 - IndexBase + IndexBase; // preserves base
+        private static long RightIndexLong(long parentIndex) => 2 * parentIndex + 2 - IndexBase + IndexBase;
+
+        public (int leftIndex, int rightIndex) GetChildrenIndices(int parentIndex)
+        {
+            // no range check here; caller must ensure parentIndex is valid
+            var left = (int)(2L * parentIndex + 1L);
+            var right = (int)(2L * parentIndex + 2L);
+            return (left, right);
+        }
+
+        private void EnsureCapacity(int requiredIndex)
+        {
+            if (requiredIndex < 0) throw new ArgumentOutOfRangeException(nameof(requiredIndex));
+
+            if (requiredIndex < _nodes.Length) return;
+
+            int newSize;
+            if (ResizeMode == ResizeStrategy.Double && _nodes.Length > 0)
+            {
+                newSize = _nodes.Length;
+                while (newSize <= requiredIndex)
+                {
+                    newSize = newSize * 2;
+                    if (newSize <= 0) // overflow safety
+                    {
+                        newSize = requiredIndex + 1;
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                newSize = requiredIndex + 1; // exact
+            }
+
+            Array.Resize(ref _nodes, newSize);
+            Array.Resize(ref _exists, newSize);
+        }
+
+        private void ValidateParentExistsOrCreate(int parentIndex)
+        {
+            if (!IsWithinBounds(parentIndex) || !_exists[parentIndex])
+            {
+                if (ParentBehavior == MissingParentBehavior.Throw)
+                {
+                    throw new InvalidOperationException($"Parent at index {parentIndex} does not exist.");
+                }
+                else // AutoCreate
+                {
+                    // Create missing parents up to parentIndex (mark them as default values)
+                    EnsureCapacity(parentIndex);
+                    if (!_exists[parentIndex])
+                    {
+                        _exists[parentIndex] = true;
+                        _nodes[parentIndex] = default!; // default value placeholder
+                        Count++;
+                    }
+                }
+            }
+        }
+
+        private bool IsWithinBounds(int index) => index >= 0 && index < _nodes.Length;
+        #endregion
+
+        #region Setters
+        public void SetRoot(T value)
+        {
+            var idx = RootIndex;
+            EnsureCapacity(idx);
+            if (!_exists[idx]) Count++;
+            _nodes[idx] = value;
+            _exists[idx] = true;
+        }
+
+        public void SetLeftChild(int parentIndex, T value)
+        {
+            if (parentIndex < 0) throw new ArgumentOutOfRangeException(nameof(parentIndex));
+            ValidateParentExistsOrCreate(parentIndex);
+            var left = 2 * parentIndex + 1;
+            EnsureCapacity(left);
+            if (!_exists[left]) Count++;
+            _nodes[left] = value;
+            _exists[left] = true;
+        }
+
+        public void SetRightChild(int parentIndex, T value)
+        {
+            if (parentIndex < 0) throw new ArgumentOutOfRangeException(nameof(parentIndex));
+            ValidateParentExistsOrCreate(parentIndex);
+            var right = 2 * parentIndex + 2;
+            EnsureCapacity(right);
+            if (!_exists[right]) Count++;
+            _nodes[right] = value;
+            _exists[right] = true;
+        }
+
+        public T this[int index]
+        {
+            get
+            {
+                if (!Exists(index)) throw new IndexOutOfRangeException($"Index {index} does not exist in tree.");
+                return _nodes[index];
+            }
+        }
+
+        public bool Exists(int index)
+        {
+            return index >= 0 && index < _nodes.Length && _exists[index];
+        }
+
+        public void Clear()
+        {
+            Array.Clear(_nodes, 0, _nodes.Length);
+            Array.Clear(_exists, 0, _exists.Length);
+            Count = 0;
+        }
+        #endregion
+
+        #region Traversals / Enumeration
+        public IEnumerator<T> GetEnumerator()
+        {
+            // EXAM_TODO: switch traversal by changing the method called here (InOrder/PreOrder/PostOrder/LevelOrder)
+            return InOrder(RootIndex).GetEnumerator();
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+        private IEnumerable<T> InOrder(int index)
+        {
+            if (!Exists(index)) yield break;
+
+            var (left, right) = GetChildrenIndices(index);
+
+            foreach (var v in InOrder(left))
+                yield return v;
+
+            yield return _nodes[index];
+
+            foreach (var v in InOrder(right))
+                yield return v;
+        }
+
+        private IEnumerable<T> PreOrder(int index)
+        {
+            if (!Exists(index)) yield break;
+
+            yield return _nodes[index];
+
+            var (left, right) = GetChildrenIndices(index);
+
+            foreach (var v in PreOrder(left)) yield return v;
+            foreach (var v in PreOrder(right)) yield return v;
+        }
+
+        private IEnumerable<T> PostOrder(int index)
+        {
+            if (!Exists(index)) yield break;
+
+            var (left, right) = GetChildrenIndices(index);
+
+            foreach (var v in PostOrder(left)) yield return v;
+            foreach (var v in PostOrder(right)) yield return v;
+
+            yield return _nodes[index];
+        }
+
+        private IEnumerable<T> LevelOrder(int startIndex)
+        {
+            var q = new Queue<int>();
+            if (Exists(startIndex)) q.Enqueue(startIndex);
+
+            while (q.Count > 0)
+            {
+                var idx = q.Dequeue();
+                yield return _nodes[idx];
+                var (left, right) = GetChildrenIndices(idx);
+                if (Exists(left)) q.Enqueue(left);
+                if (Exists(right)) q.Enqueue(right);
+            }
+        }
+        #endregion
+
+        #region Optional manual enumerator (no-yield variant)
+        // This class demonstrates a manual enumerator implementing IEnumerator<T>.
+        // Use when exam asks for explicit IEnumerator implementation (no yield).
+        public class ManualEnumerator : IEnumerator<T>
+        {
+            private readonly ArrayBinaryTree<T> _tree;
+            private readonly Stack<int> _stack = new Stack<int>();
+            private int? _currentIndex = null;
+
+            public ManualEnumerator(ArrayBinaryTree<T> tree)
+            {
+                _tree = tree ?? throw new ArgumentNullException(nameof(tree));
+                // initialize stack for iterative in-order
+                var idx = tree.RootIndex;
+                PushLeftChain(idx);
+            }
+
+            private void PushLeftChain(int idx)
+            {
+                while (_tree.Exists(idx))
+                {
+                    _stack.Push(idx);
+                    idx = 2 * idx + 1; // left
+                }
+            }
+
+            public T Current => _currentIndex.HasValue ? _tree._nodes[_currentIndex.Value] : throw new InvalidOperationException();
+            object IEnumerator.Current => Current;
+
+            public bool MoveNext()
+            {
+                if (_stack.Count == 0) return false;
+
+                var idx = _stack.Pop();
+                _currentIndex = idx;
+
+                var right = 2 * idx + 2;
+                PushLeftChain(right);
+                return true;
+            }
+
+            public void Reset()
+            {
+                _stack.Clear();
+                _currentIndex = null;
+                PushLeftChain(_tree.RootIndex);
+            }
+
+            public void Dispose() { }
+        }
+        #endregion
+
+        #region Utility helpers for debugging / printing
+        public override string ToString()
+        {
+            return $"ArrayBinaryTree(Count={Count}, Capacity={_nodes.Length})";
+        }
+
+        // Debug dump: returns (index,value) pairs
+        public IEnumerable<(int index, T value)> DumpExisting()
+        {
+            for (int i = 0; i < _nodes.Length; i++)
+            {
+                if (_exists[i]) yield return (i, _nodes[i]);
+            }
+        }
+        #endregion
+    }
+}
