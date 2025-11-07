@@ -1,0 +1,261 @@
+# SNIPPETS.md — ready-to-copy code fragments
+
+Poniżej znajdziesz krótkie, gotowe do wklejenia fragmenty kodu (snippety) najczęściej używanych wzorców z przygotowań. Użyj ich podczas egzaminu: wyszukaj miejsce `// EXAM_TODO` i wklej odpowiedni snippet. Wszystkie fragmenty są krótkie (zwykle kilka linijek) i zostały przygotowane tak, by minimalnie ingerować w resztę kodu.
+
+> Wklejając: pamiętaj o `using System.Linq;` oraz `using System.Collections.Generic;` w górze pliku, jeśli jeszcze ich nie ma.
+
+---
+
+## 1) TopN including ties (pattern)
+
+Jeżeli chcesz zwrócić top N elementów biorąc pod uwagę remisy (wszystkie elementy, które mają liczbę >= threshold):
+
+```csharp
+// EXAM_SNIPPET: TopNWithTies
+var groups = items.GroupBy(x => x.Key).OrderByDescending(g => g.Count()).ToList();
+if (!groups.Any()) return Enumerable.Empty<TResult>();
+var top = groups.Take(N).ToList();
+var threshold = top.Last().Count();
+var topWithTies = groups.Where(g => g.Count() >= threshold).SelectMany(g => g).ToList();
+```
+
+Zamień `items`, `Key`, `N` oraz typ projekcji wedle potrzeby.
+
+---
+
+## 2) Iterative In-Order traversal (stack, no recursion)
+
+Użyteczne, gdy rekurencja jest zabroniona.
+
+```csharp
+// EXAM_SNIPPET: IterativeInOrder
+IEnumerable<T> IterativeInOrder(int root)
+{
+    var stack = new Stack<int>();
+    int current = root;
+    while (stack.Count > 0 || tree.Exists(current))
+    {
+        while (tree.Exists(current))
+        {
+            stack.Push(current);
+            current = 2 * current + 1; // left
+        }
+        if (stack.Count == 0) break;
+        var idx = stack.Pop();
+        yield return tree[idx];
+        current = 2 * idx + 2; // right
+    }
+}
+```
+
+Wklej i zamień `tree` na odniesienie do swojej instancji i `root` na `RootIndex`.
+
+---
+
+## 3) Manual IEnumerator skeleton (no yield)
+
+Jeżeli egzamin wymaga jawnej klasy `IEnumerator<T>`:
+
+```csharp
+// EXAM_SNIPPET: ManualEnumeratorSkeleton
+public class ManualEnumerator : IEnumerator<T>
+{
+    private readonly ArrayBinaryTree<T> _tree;
+    private readonly Stack<int> _stack = new();
+    private int? _current = null;
+    public ManualEnumerator(ArrayBinaryTree<T> tree) { _tree = tree; PushLeftChain(tree.RootIndex); }
+    void PushLeftChain(int idx) { while (_tree.Exists(idx)) { _stack.Push(idx); idx = 2 * idx + 1; } }
+    public T Current => _current.HasValue ? _tree[_current.Value] : throw new InvalidOperationException();
+    object IEnumerator.Current => Current;
+    public bool MoveNext() { if (_stack.Count == 0) return false; var idx = _stack.Pop(); _current = idx; PushLeftChain(2*idx+2); return true; }
+    public void Reset() { _stack.Clear(); _current = null; PushLeftChain(_tree.RootIndex); }
+    public void Dispose() { }
+}
+```
+
+---
+
+## 4) Batch with step > 1 (overlapping or skipping)
+
+Wariant `Batch` który przesuwa się o `step` (może być mniejszy niż `size` dla nakładania lub większy dla skip):
+
+```csharp
+// EXAM_SNIPPET: BatchWithStep
+public static IEnumerable<IEnumerable<T>> BatchWithStep<T>(IEnumerable<T> source, int size, int step)
+{
+    if (size < 1) throw new ArgumentOutOfRangeException(nameof(size));
+    if (step < 1) throw new ArgumentOutOfRangeException(nameof(step));
+    var buffer = new LinkedList<T>();
+    using var e = source.GetEnumerator();
+    while (e.MoveNext())
+    {
+        buffer.AddLast(e.Current);
+        if (buffer.Count > size) buffer.RemoveFirst();
+        if (buffer.Count == size) yield return buffer.ToList();
+        // advance additional (step-1) elements
+        for (int i = 1; i < step && e.MoveNext(); i++) { buffer.AddLast(e.Current); if (buffer.Count > size) buffer.RemoveFirst(); }
+    }
+}
+```
+
+---
+
+## 5) SlidingWindow with padding (pad with default(T) or return partial)
+
+```csharp
+// EXAM_SNIPPET: SlidingWindowPadding
+public static IEnumerable<T[]> SlidingWindowPad<T>(IEnumerable<T> source, int size, bool padWithDefault)
+{
+    if (size < 1) throw new ArgumentOutOfRangeException(nameof(size));
+    var q = new Queue<T>();
+    using var e = source.GetEnumerator();
+    while (e.MoveNext())
+    {
+        q.Enqueue(e.Current);
+        if (q.Count > size) q.Dequeue();
+        if (q.Count == size) yield return q.ToArray();
+    }
+    if (q.Count > 0 && padWithDefault)
+    {
+        var arr = q.ToArray().ToList();
+        while (arr.Count < size) arr.Add(default!);
+        yield return arr.ToArray();
+    }
+}
+```
+
+---
+
+## 6) SafeAverage pattern (avoid Average() on empty sequences)
+
+```csharp
+// EXAM_SNIPPET: SafeAverage
+double? SafeAvg(IEnumerable<int> scores)
+{
+    if (scores == null || !scores.Any()) return null; // or return 0.0 depending on policy
+    return scores.Average();
+}
+```
+
+Używaj tego zamiast `.Average()` jeśli nie masz pewności, że sekwencja nie jest pusta.
+
+---
+
+## 7) Dictionary-join (prebuild lookup) — performance trick
+
+```csharp
+// EXAM_SNIPPET: DictionaryJoin
+var moviesById = db.Movies.ToDictionary(m => m.Id);
+var actorsById = db.Actors.ToDictionary(a => a.Id);
+var result = ratings
+    .GroupBy(r => r.MovieId)
+    .Select(g => new { Movie = moviesById[g.Key], Average = g.Average(r => r.Score) })
+    .ToList();
+```
+
+---
+
+## 8) PreOrder / PostOrder snippets
+
+```csharp
+// EXAM_SNIPPET: PreOrder
+IEnumerable<T> PreOrder(int idx)
+{
+    if (!tree.Exists(idx)) yield break;
+    yield return tree[idx];
+    foreach (var v in PreOrder(2*idx+1)) yield return v;
+    foreach (var v in PreOrder(2*idx+2)) yield return v;
+}
+
+// EXAM_SNIPPET: PostOrder
+IEnumerable<T> PostOrder(int idx)
+{
+    if (!tree.Exists(idx)) yield break;
+    foreach (var v in PostOrder(2*idx+1)) yield return v;
+    foreach (var v in PostOrder(2*idx+2)) yield return v;
+    yield return tree[idx];
+}
+```
+
+---
+
+## 9) Fold usage examples (sum, concat)
+
+```csharp
+// EXAM_SNIPPET: FoldSum
+var sum = numbers.Fold(0, (acc,x) => acc + x);
+
+// EXAM_SNIPPET: FoldConcat
+var concatenated = words.Fold(new StringBuilder(), (sb, w) => sb.Append(w).Append(' '), sb => sb.ToString().Trim());
+```
+
+---
+
+## 10) SlidingWindow moving average example
+
+```csharp
+// EXAM_SNIPPET: MovingAverage
+var movingAvg = series.SlidingWindow(3).Select(win => win.Average());
+```
+
+---
+
+## 11) Batch returning arrays (T[]) snippet
+
+```csharp
+// EXAM_SNIPPET: BatchToArray
+public static IEnumerable<T[]> BatchToArray<T>(IEnumerable<T> source, int size)
+{
+    foreach (var batch in source.Batch(size)) yield return batch.ToArray();
+}
+```
+
+---
+
+## 12) JSON / CSV output helpers
+
+```csharp
+// EXAM_SNIPPET: DisplayJson
+public static void DisplayJson<T>(T obj)
+{
+    var opts = new JsonSerializerOptions { WriteIndented = true };
+    opts.Converters.Add(new JsonStringEnumConverter());
+    Console.WriteLine(JsonSerializer.Serialize(obj, opts));
+}
+
+// EXAM_SNIPPET: DisplayCsv (simple)
+public static void DisplayCsv<T>(IEnumerable<T> rows, Func<T, string[]> projection)
+{
+    foreach (var r in rows) Console.WriteLine(string.Join(",", projection(r)));
+}
+```
+
+---
+
+## 13) Quick sed/Powershell commands (for quick-edit script)
+
+**sed (bash)**
+
+```bash
+# Replace RatingThresholdDefault = 8; with 7
+sed -i.bak -E "s/public const int RatingThresholdDefault = [0-9]+;/public const int RatingThresholdDefault = 7;/" src/Movies/DatabaseQueries.Base.cs
+```
+
+**powershell**
+
+```powershell
+# Replace IndexBase = 0 to 1
+(Get-Content src/DataStructures/ArrayBinaryTree.Base.cs) -replace 'public const int IndexBase = [0-9]+;', 'public const int IndexBase = 1;' | Set-Content src/DataStructures/ArrayBinaryTree.Base.cs
+```
+
+---
+
+## 14) Notes
+
+* Zawsze uruchom `dotnet build` po wklejeniu nowego snippetu.
+* Jeśli w kodzie używasz `default!` (null-forgiving), upewnij się że jest to właściwe dla typu `T`.
+* Jeśli egzamin wymaga innego formatu wejścia/wyjścia, przygotuj w `Program.cs` loader parsujący `stdin` albo prosty parser CSV/JSON — gotowe fragmenty masz w `src/`.
+
+---
+
+Masz wybrany snippet do wygenerowania bezpośrednio jako plik kodu, albo wklejasz z tego dokumentu? Jeśli chcesz, mogę teraz wygenerować konkretne pliki z tymi snippetami w formie `src/.../snippets/*.cs`.
