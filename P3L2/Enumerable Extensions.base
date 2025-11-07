@@ -1,0 +1,342 @@
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+// EXAM_VARIANT: EnumerableExtensions.Base
+// Purpose: base implementations of Fold, Batch and SlidingWindow with explicit enumerator usage.
+// NOTE: These are _base_ helpers for the exam repo. Do NOT replace answers you already have for your specific tasks;
+//       use these as reusable building blocks and EXAM_SNIPPETS for quick edits.
+
+namespace ExamMaterials.LinqExtensions
+{
+    public static class EnumerableExtensions
+    {
+        /*
+         EXAM_CONFIG block (edit these constants during exam to change default behavior quickly)
+         Example usage: // EXAM_CONFIG: BatchDefaultPadPolicy = PadPolicy.SkipPartial
+        */
+        // EXAM_CONFIG
+        public enum PadPolicy { PadWithDefault, SkipPartial, ReturnPartial }
+
+        // default behaviors (change during exam via quick-edit script)
+        public const PadPolicy BatchDefaultPadPolicy = PadPolicy.ReturnPartial; // options: PadWithDefault / SkipPartial / ReturnPartial
+        public const int BatchDefaultCapacityHint = 16; // hint used when creating lists for batches
+
+        #region Fold
+        /// <summary>
+        /// Fold (left aggregate) implemented using an explicit enumerator over the source.
+        /// Equivalent to Aggregate but with a final result selector and explicit enumerator.
+        /// </summary>
+        /// <typeparam name="TSource"></typeparam>
+        /// <typeparam name="TAccumulate"></typeparam>
+        /// <typeparam name="TResult"></typeparam>
+        /// <param name="source"></param>
+        /// <param name="seed"></param>
+        /// <param name="func"></param>
+        /// <param name="resultSelector"></param>
+        /// <returns></returns>
+        public static TResult Fold<TSource, TAccumulate, TResult>(
+            this IEnumerable<TSource> source,
+            TAccumulate seed,
+            Func<TAccumulate, TSource, TAccumulate> func,
+            Func<TAccumulate, TResult> resultSelector)
+        {
+            if (source == null) throw new ArgumentNullException(nameof(source));
+            if (func == null) throw new ArgumentNullException(nameof(func));
+            if (resultSelector == null) throw new ArgumentNullException(nameof(resultSelector));
+
+            var acc = seed;
+            using (var enumerator = source.GetEnumerator())
+            {
+                while (enumerator.MoveNext())
+                {
+                    acc = func(acc, enumerator.Current);
+                }
+            }
+
+            return resultSelector(acc);
+        }
+
+        /// <summary>
+        /// Overload: Fold without resultSelector (returns the accumulator type)
+        /// </summary>
+        public static TAccumulate Fold<TSource, TAccumulate>(
+            this IEnumerable<TSource> source,
+            TAccumulate seed,
+            Func<TAccumulate, TSource, TAccumulate> func)
+        {
+            return source.Fold(seed, func, acc => acc);
+        }
+
+        /// <summary>
+        /// FoldRight (for indexable sources) — processes elements from right to left.
+        /// Useful variant: implemented efficiently when source is IList<T>.
+        /// If source is not IList&lt;T&gt; it will be materialized to a list.
+        /// </summary>
+        public static TResult FoldRight<TSource, TAccumulate, TResult>(
+            this IEnumerable<TSource> source,
+            TAccumulate seed,
+            Func<TAccumulate, TSource, TAccumulate> func,
+            Func<TAccumulate, TResult> resultSelector)
+        {
+            if (source == null) throw new ArgumentNullException(nameof(source));
+            if (func == null) throw new ArgumentNullException(nameof(func));
+            if (resultSelector == null) throw new ArgumentNullException(nameof(resultSelector));
+
+            // materialize if not indexable
+            var list = source as IList<TSource> ?? new List<TSource>(source);
+            var acc = seed;
+            for (int i = list.Count - 1; i >= 0; i--)
+            {
+                acc = func(acc, list[i]);
+            }
+
+            return resultSelector(acc);
+        }
+        #endregion
+
+        #region Batch
+        /// <summary>
+        /// Batch: divides input into consecutive batches of up to `size` elements.
+        /// Implemented with explicit enumerator and yield-return. Default behaviour controlled by EXAM_CONFIG.
+        /// Returns List&lt;T&gt; for each batch to be mutable/indexable in downstream code.
+        /// </summary>
+        public static IEnumerable<IEnumerable<T>> Batch<T>(
+            this IEnumerable<T> collection,
+            int size)
+        {
+            return collection.Batch(size, step: size, pad: BatchDefaultPadPolicy, capacityHint: BatchDefaultCapacityHint);
+        }
+
+        /// <summary>
+        /// Batch with step, padding policy and capacity hint.
+        /// step &lt; size -> overlapping batches; step &gt; size -> skipping; step == size -> non-overlapping.
+        /// pad controls how to treat the final partial batch.
+        /// </summary>
+        public static IEnumerable<IEnumerable<T>> Batch<T>(
+            this IEnumerable<T> collection,
+            int size,
+            int step = -1,
+            PadPolicy pad = BatchDefaultPadPolicy,
+            int capacityHint = BatchDefaultCapacityHint)
+        {
+            if (collection == null) throw new ArgumentNullException(nameof(collection));
+            if (size < 1) throw new ArgumentOutOfRangeException(nameof(size), "Batch size must be at least 1.");
+
+            if (step == -1) step = size; // default non-overlapping
+            if (step < 1) throw new ArgumentOutOfRangeException(nameof(step), "Step must be at least 1.");
+
+            // Special fast-path for non-overlapping standard batches (most common use-case)
+            if (step == size && pad != PadPolicy.PadWithDefault)
+            {
+                using var e = collection.GetEnumerator();
+                while (e.MoveNext())
+                {
+                    var list = new List<T>(capacityHint) { e.Current };
+                    for (var i = 1; i < size && e.MoveNext(); i++)
+                    {
+                        list.Add(e.Current);
+                    }
+
+                    if (list.Count == size || pad == PadPolicy.ReturnPartial)
+                        yield return list;
+                    else if (pad == PadPolicy.PadWithDefault)
+                    {
+                        while (list.Count < size) list.Add(default!);
+                        yield return list;
+                    }
+                    // if SkipPartial and list.Count < size -> do not yield
+                }
+
+                yield break;
+            }
+
+            // General overlapping / sliding approach (uses a circular buffer / queue approach)
+            // We'll implement a simple queue-based window advance for generic step values.
+            var buffer = new LinkedList<T>();
+            using var enumerator = collection.GetEnumerator();
+            bool finished = false;
+
+            // Pre-fill up to 'size' or until finished
+            while (buffer.Count < size && (finished = !enumerator.MoveNext()) == false)
+            {
+                buffer.AddLast(enumerator.Current);
+            }
+
+            if (buffer.Count == size)
+            {
+                // yield first full batch
+                yield return new List<T>(buffer);
+            }
+            else
+            {
+                if (buffer.Count > 0 && pad == PadPolicy.ReturnPartial)
+                {
+                    yield return new List<T>(buffer);
+                }
+                else if (buffer.Count > 0 && pad == PadPolicy.PadWithDefault)
+                {
+                    var tmp = new List<T>(size);
+                    foreach (var x in buffer) tmp.Add(x);
+                    while (tmp.Count < size) tmp.Add(default!);
+                    yield return tmp;
+                }
+                yield break; // no more elements
+            }
+
+            // Advance with step: remove 'step' elements from front and try to append 'step' new
+            while (true)
+            {
+                // Remove step elements or until empty
+                for (var i = 0; i < step && buffer.Count > 0; i++) buffer.RemoveFirst();
+
+                // Try to fill buffer back to 'size'
+                while (buffer.Count < size && enumerator.MoveNext())
+                {
+                    buffer.AddLast(enumerator.Current);
+                }
+
+                if (buffer.Count == size)
+                {
+                    yield return new List<T>(buffer);
+                }
+                else
+                {
+                    // Partial tail
+                    if (buffer.Count > 0 && pad == PadPolicy.ReturnPartial)
+                    {
+                        yield return new List<T>(buffer);
+                    }
+                    else if (buffer.Count > 0 && pad == PadPolicy.PadWithDefault)
+                    {
+                        var tmp = new List<T>(size);
+                        foreach (var x in buffer) tmp.Add(x);
+                        while (tmp.Count < size) tmp.Add(default!);
+                        yield return tmp;
+                    }
+                    yield break;
+                }
+            }
+        }
+        #endregion
+
+        #region SlidingWindow
+        /// <summary>
+        /// SlidingWindow: returns overlapping windows of fixed size, sliding by one by default.
+        /// Default returns T[] (copy) to avoid exposing internal buffers.
+        /// </summary>
+        public static IEnumerable<T[]> SlidingWindow<T>(
+            this IEnumerable<T> collection,
+            int size)
+        {
+            return SlidingWindow(collection, size, step: 1, pad: PadPolicy.SkipPartial);
+        }
+
+        /// <summary>
+        /// SlidingWindow with step and padding policy.
+        /// </summary>
+        public static IEnumerable<T[]> SlidingWindow<T>(
+            this IEnumerable<T> collection,
+            int size,
+            int step = 1,
+            PadPolicy pad = PadPolicy.SkipPartial)
+        {
+            if (collection == null) throw new ArgumentNullException(nameof(collection));
+            if (size < 1) throw new ArgumentOutOfRangeException(nameof(size), "Window size must be at least 1.");
+            if (step < 1) throw new ArgumentOutOfRangeException(nameof(step), "Step must be at least 1.");
+
+            var window = new Queue<T>(size);
+
+            using var e = collection.GetEnumerator();
+            while (e.MoveNext())
+            {
+                window.Enqueue(e.Current);
+                if (window.Count > size) window.Dequeue();
+
+                if (window.Count == size)
+                {
+                    yield return window.ToArray();
+
+                    // advance step-1 items from enumerator by dequeueing / enqueueing next elements
+                    if (step > 1)
+                    {
+                        // we have already consumed 1 element for this iteration, to move step we need to
+                        // attempt to read (step-1) new elements; this logic will attempt to shift window by step
+                        int advanced = 0;
+                        while (advanced < step - 1 && e.MoveNext())
+                        {
+                            window.Enqueue(e.Current);
+                            if (window.Count > size) window.Dequeue();
+                            advanced++;
+                        }
+
+                        // if advanced < step-1 it means enumerator ended; loop will continue naturally
+                    }
+                }
+            }
+
+            // Tail handling when pad != SkipPartial
+            if (window.Count > 0 && window.Count < size && pad != PadPolicy.SkipPartial)
+            {
+                if (pad == PadPolicy.PadWithDefault)
+                {
+                    var tmp = new List<T>(size);
+                    foreach (var x in window) tmp.Add(x);
+                    while (tmp.Count < size) tmp.Add(default!);
+                    yield return tmp.ToArray();
+                }
+                else if (pad == PadPolicy.ReturnPartial)
+                {
+                    yield return window.ToArray();
+                }
+            }
+        }
+        #endregion
+
+        #region Async helpers
+        /// <summary>
+        /// Fold for IAsyncEnumerable (basic variant). Requires C# 8+ / .NET Core 3.0+
+        /// </summary>
+        public static async Task<TResult> FoldAsync<TSource, TAccumulate, TResult>(
+            this IAsyncEnumerable<TSource> source,
+            TAccumulate seed,
+            Func<TAccumulate, TSource, TAccumulate> func,
+            Func<TAccumulate, TResult> resultSelector)
+        {
+            if (source == null) throw new ArgumentNullException(nameof(source));
+            if (func == null) throw new ArgumentNullException(nameof(func));
+            if (resultSelector == null) throw new ArgumentNullException(nameof(resultSelector));
+
+            var acc = seed;
+            await foreach (var item in source)
+            {
+                acc = func(acc, item);
+            }
+
+            return resultSelector(acc);
+        }
+        #endregion
+
+        #region Helpful snippets (for quick exam copying)
+        // EXAM_SNIPPETS: ready to paste small patterns
+        // Sum of ints using Fold:
+        // var sum = numbers.Fold(0, (acc,x) => acc + x);
+
+        // Moving average with SlidingWindow:
+        // var movingAverages = series.SlidingWindow(3).Select(w => w.Average());
+
+        // TopN including ties pattern (useful for movie queries):
+        /*
+        var topGroups = items.GroupBy(x => x.Key)
+                             .OrderByDescending(g => g.Count())
+                             .Take(N)
+                             .ToList();
+        var threshold = topGroups.Last().Count();
+        var topWithTies = items.GroupBy(x => x.Key)
+                               .Where(g => g.Count() >= threshold)
+                               .Select(g => new { Key = g.Key, Count = g.Count() })
+                               .ToList();
+        */
+        #endregion
+    }
+}
