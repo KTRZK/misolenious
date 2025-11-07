@@ -1,0 +1,188 @@
+Oto gotowa **notatka-przewodnik „README_REPO_USAGE.md”** — do skopiowania wprost do Twojego repozytorium.
+Zawiera logiczny opis struktury, sposoby użycia każdego zestawu plików, skróty testowe i instrukcje, jak błyskawicznie dopasować kod do egzaminowych wariantów.
+Wszystko w minimalistycznym stylu „ściągi” — tak, abyś mógł mieć to otwarte obok IDE i w kilka sekund odnaleźć potrzebny fragment.
+
+---
+
+```markdown
+# 🧭 Repozytorium Egzaminacyjne – Przewodnik Użycia
+
+Repozytorium zawiera komplet materiałów pozwalający błyskawicznie adaptować rozwiązania do zadań z egzaminu:
+- **Etap 1 – Metody rozszerzające (`IEnumerable<T>`, iteratory, batch/sliding window)**  
+- **Etap 2 – Analiza danych LINQ (Movies, Actors, Commits, Authors, itp.)**
+
+---
+
+## 📁 Struktura repozytorium
+
+```
+
+src/
+├── EnumerableExtensions.Base.cs      # Główne metody rozszerzające (Batch, SlidingWindow, itp.)
+├── AdvancedEnumerableTasks2.cs       # Warianty rozszerzone: Chunk, TopNWithTies, Pairwise, SlidingMedian, itp.
+├── ArrayBinaryTree.Base.cs           # Implementacja drzewa binarnego w tablicy (IEnumerable<T>)
+├── DatabaseQueries.Base.cs           # Gotowe szablony zapytań LINQ (Movies, Commits, Authors)
+└── tools/
+└── quick-edit.sh                 # Skrypt do szybkiej podmiany nazw i wklejania gotowych fragmentów
+docs/
+├── ADAPTATION_MATRIX.md              # Matryca dostosowania – co zmienić przy danym typie polecenia
+└── SNIPPETS.md                       # Gotowe fragmenty kodu i mini-zadania (Pairwise, SlidingMedian, itp.)
+
+````
+
+---
+
+## 🚀 Szybkie uruchomienie i testowanie
+
+### 🔹 Etap 1: Metody rozszerzające (`EnumerableExtensions.Base.cs`, `AdvancedEnumerableTasks2.cs`)
+
+1. Otwórz `Program.cs` i dodaj:
+   ```csharp
+   AdvancedEnumerableTasks2Demo.Run();
+````
+
+Uruchom, aby przetestować wszystkie warianty jednocześnie.
+
+2. Dla pojedynczej metody:
+
+   ```csharp
+   var data = Enumerable.Range(1, 10);
+   foreach (var w in data.SlidingWindow(3))
+       Console.WriteLine($"[{string.Join(", ", w)}]");
+   ```
+
+3. Do wariantów egzaminacyjnych:
+
+   * Zmieniasz **nazwę metody** (np. `SlidingWindow` → `MovingWindow`)
+   * Dodajesz **argument step/padding** (jeśli w zadaniu wymagany przesuw o >1)
+   * Czasem trzeba zmienić typ zwracany (`IEnumerable<List<T>>` → `IEnumerable<T[]>`)
+
+4. 🔍 W razie wymagań „iterować po elementach” → użyj `yield return` i `foreach`
+   W razie „wypisać do konsoli” → dodaj pętlę z `Console.WriteLine`.
+
+---
+
+### 🔹 Etap 2: LINQ i analizy danych (`DatabaseQueries.Base.cs`)
+
+1. Zastąp `SampleMovieDatabase` własnymi danymi lub strukturami z polecenia (np. commits/authors).
+2. Dla typowych egzaminowych modyfikacji:
+
+   * Zmieniasz typ danych (`Movies` → `Commits`, `Actors` → `Authors`)
+   * Zmieniasz grupowanie (`GroupBy(m => m.Genre)` → `GroupBy(c => c.AuthorId)`)
+   * Sortujesz lub filtrujesz w `where` i `orderby`
+3. Gotowe szablony:
+
+   * **INNER JOIN** → `Join()`
+   * **LEFT JOIN** → `GroupJoin()` + `DefaultIfEmpty()`
+   * **Średnia ocen** → `.GroupBy(...).Select(g => new { ..., Avg = g.Average(x => x.Score) })`
+   * **Top N** → `.OrderByDescending(...).Take(n)`
+   * **Bez dopasowań** → `where !Any(...)`
+
+📌 W `ADAPTATION_MATRIX.md` znajdziesz szczegółowe mapowanie:
+
+> `Movies → Commits`, `Actors → Authors`, `Ratings → Changes`, itp.
+
+---
+
+### 🔹 Etap 3: Drzewa tablicowe (`ArrayBinaryTree.Base.cs`)
+
+1. Struktura oparta o tablicę `_nodes`.
+2. Dla wariantów egzaminacyjnych:
+
+   * Dodaj wypisywanie `foreach (var x in tree)` (już obsłużone przez `IEnumerable<T>`)
+   * Aby obsłużyć dynamiczne dodawanie: `Array.Resize(ref _nodes, newSize)`
+   * Aby implementować inne porządki przejścia drzewa: zmień metodę `InOrder` → `PreOrder` lub `PostOrder`
+
+Przykład:
+
+```csharp
+foreach (var v in tree)
+    Console.Write($"{v} "); // automatycznie wywoła InOrder
+```
+
+---
+
+## ⚙️ Skrypt automatyczny (`tools/quick-edit.sh`)
+
+Umożliwia szybkie dopasowanie kodu do egzaminu:
+
+```bash
+./tools/quick-edit.sh --replace SlidingWindow MovingWindow
+./tools/quick-edit.sh --add-param size:int step:int
+```
+
+Skrypt wykorzystuje `sed` do masowej zamiany nazw i sygnatur w wielu plikach.
+
+---
+
+## 🧩 Dodatkowe narzędzia
+
+* `SNIPPETS.md` — szybki dostęp do mini-funkcji (`Pairwise`, `AdjacentDiffs`, `TopNWithTies`)
+* `ADAPTATION_MATRIX.md` — mapa zamiany nazw między różnymi zadaniami (np. Movies ↔ Commits)
+* `AdvancedEnumerableTasks2.cs` — warianty trudniejszych zadań (median, top N z remisami, chunkowanie)
+
+---
+
+## 💡 Szybka adaptacja do poleceń egzaminacyjnych
+
+| Typ polecenia egzaminu                 | Co wkleić / zmienić                                                        |
+| -------------------------------------- | -------------------------------------------------------------------------- |
+| „Zaimplementuj metodę rozszerzającą …” | Skopiuj z `EnumerableExtensions.Base.cs` lub `AdvancedEnumerableTasks2.cs` |
+| „Zaimplementuj enumerator drzewa …”    | Skopiuj `ArrayBinaryTree.Base.cs`                                          |
+| „Wypisz elementy drzewa w porządku …”  | Użyj `foreach (var v in tree)` lub zmień `InOrder()`                       |
+| „Oblicz średnią / grupowanie w LINQ”   | Kopiuj z `DatabaseQueries.Base.cs`                                         |
+| „Złączenia (JOIN / LEFT JOIN)”         | Wzorce w `DatabaseQueries.Base.cs`                                         |
+| „Top 3 elementy z remisami”            | Użyj `TopNWithTies()` z `AdvancedEnumerableTasks2.cs`                      |
+| „Okna przesuwne z krokiem/paddingiem”  | Użyj `SlidingWindowVariant()`                                              |
+
+---
+
+## 🧠 Wskazówki do adaptacji
+
+* Wszystkie metody są **statyczne** — można je skopiować do dowolnej klasy `Extensions`.
+* Typ `T` jest generyczny, więc można go zmieniać bez refaktoryzacji.
+* Jeśli egzamin wymaga **tylko LINQ**, usuń `yield return` i przepisz na `.Select()` / `.Where()`.
+* W razie ograniczenia importów, wystarczy:
+
+  ```csharp
+  using System;
+  using System.Collections.Generic;
+  using System.Linq;
+  ```
+
+---
+
+## 🧩 Polecane kombinacje do testu (do szybkiego przetestowania)
+
+```csharp
+// Test Batch / SlidingWindow
+Enumerable.Range(1, 7).Batch(3).Print();
+Enumerable.Range(1, 7).SlidingWindow(3).Print();
+
+// Test LINQ
+DatabaseQueries.Example3_FilmyPowyzej8ZObsada();
+
+// Test drzewa
+var tree = new ArrayBinaryTree<int>();
+tree.SetRoot(10);
+tree.SetLeftChild(0, 5);
+tree.SetRightChild(0, 15);
+foreach (var v in tree) Console.WriteLine(v);
+```
+
+---
+
+## 📌 Zalecane ustawienia środowiska
+
+* .NET SDK: 6.0 lub wyżej
+* `dotnet run` z folderu głównego repozytorium
+* Visual Studio Code + rozszerzenie *C# Dev Kit*
+* Alternatywnie: Rider / Visual Studio 2022
+
+---
+
+## ✅ Cel repozytorium
+
+Repozytorium to gotowy **pakiet startowy**:
+
+* Możesz w kilka sekund dopasować
