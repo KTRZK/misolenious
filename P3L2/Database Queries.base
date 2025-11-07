@@ -356,3 +356,330 @@ namespace ExamMaterials.Movies
         #endregion
     }
 }
+
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace Lab2_RepoTraversal
+{
+    // Reprezentacja commita
+    public class Commit
+    {
+        public string Hash { get; }
+        public List<string> ParentHashes { get; }
+
+        public Commit(string hash, IEnumerable<string> parents = null)
+        {
+            Hash = hash;
+            ParentHashes = parents?.ToList() ?? new List<string>();
+        }
+    }
+
+    // Prosty model repozytorium
+    public class Repository
+    {
+        // obiekty przechowywane pod skrótami (commity)
+        public Dictionary<string, Commit> Objects { get; } = new Dictionary<string, Commit>();
+
+        // gałęzie: nazwa -> skrót obiektu
+        public Dictionary<string, string> Branches { get; } = new Dictionary<string, string>();
+
+        // HEAD wskazany jako skrót
+        public string HEAD { get; set; }
+
+        // --- metody wymagane przez zadanie ---
+        public bool TryGetCommit(string hash, out Commit commit)
+        {
+            if (hash == null) { commit = null; return false; }
+            return Objects.TryGetValue(hash, out commit);
+        }
+
+        public Commit GetCommitOrThrow(string hash)
+        {
+            if (!TryGetCommit(hash, out var commit))
+                throw new InvalidOperationException($"Commit '{hash}' not found");
+            return commit;
+        }
+
+        // Traverse po pierwszych rodzicach (first parent)
+        public IEnumerable<Commit> TraverseBranchByFirstParent(string startHash = null)
+        {
+            var start = startHash ?? HEAD;
+            if (start == null)
+                yield break;
+
+            var currentHash = start;
+            while (true)
+            {
+                if (!TryGetCommit(currentHash, out var current))
+                    throw new InvalidOperationException($"Commit '{currentHash}' not found");
+
+                yield return current;
+
+                if (current.ParentHashes.Count == 0)
+                    yield break;
+
+                // idziemy po pierwszym rodzicu
+                currentHash = current.ParentHashes[0];
+            }
+        }
+
+        // TraverseByRevision zgodnie z patternem Revision (zwraca lazy IEnumerable<Commit>)
+        public IEnumerable<Commit> TraverseByRevision(string pattern)
+        {
+            var rev = Revision.Parse(pattern);
+
+            // 1. Rozwiąż BaseRef -> daje sekwencję skrótów (zwykle pojedynczy element)
+            IEnumerable<string> hashes = ResolveBaseRefToHashes(rev.BaseRef);
+            // 2. Zastosuj kolejno modyfikatory
+            foreach (var mod in rev.Modifiers)
+            {
+                hashes = mod.Apply(this, hashes);
+            }
+
+            // 3. Pobierz obiekty z repo i zwróć je (leniwie)
+            foreach (var h in hashes)
+            {
+                yield return GetCommitOrThrow(h);
+            }
+        }
+
+        private IEnumerable<string> ResolveBaseRefToHashes(string baseRef)
+        {
+            if (string.IsNullOrEmpty(baseRef))
+                throw new InvalidOperationException("Base reference not provided");
+
+            // jeżeli BaseRef to HEAD
+            if (baseRef == "HEAD")
+            {
+                if (HEAD == null)
+                    throw new InvalidOperationException("Base reference not found");
+                yield return HEAD;
+                yield break;
+            }
+
+            // jeżeli jest nazwą gałęzi
+            if (Branches.TryGetValue(baseRef, out var branchHash))
+            {
+                yield return branchHash;
+                yield break;
+            }
+
+            // jeżeli jest bezpośrednim skrótem w objects
+            if (Objects.ContainsKey(baseRef))
+            {
+                yield return baseRef;
+                yield break;
+            }
+
+            throw new InvalidOperationException("Base reference not found");
+        }
+    }
+
+    // Interfejs modyfikatora Revision (Apply przyjmuje repo i kolekcję hashy, zwraca kolekcję hashy)
+    public interface IRevisionModifier
+    {
+        IEnumerable<string> Apply(Repository repo, IEnumerable<string> inputHashes);
+    }
+
+    // ^N  => ParentIndexModifier
+    // ^  (bez liczby) traktujemy jako ^1 (pierwszy rodzic)
+    public class ParentIndexModifier : IRevisionModifier
+    {
+        public int Index { get; } // 1-based index
+
+        public ParentIndexModifier(int index = 1)
+        {
+            if (index <= 0) throw new ArgumentException("Parent index must be positive");
+            Index = index;
+        }
+
+        public IEnumerable<string> Apply(Repository repo, IEnumerable<string> inputHashes)
+        {
+            foreach (var h in inputHashes)
+            {
+                var commit = repo.GetCommitOrThrow(h);
+                if (commit.ParentHashes.Count == 0)
+                    throw new InvalidOperationException($"Commit '{h}' has no parent");
+
+                // parent index is 1-based; if index > count -> error "does not have parent #{index}"
+                if (Index > commit.ParentHashes.Count)
+                    throw new InvalidOperationException($"Commit '{h}' does not have parent #{Index}");
+
+                yield return commit.ParentHashes[Index - 1];
+            }
+        }
+    }
+
+    // ~N => AncestorCountModifier: cofa N razy po pierwszym rodzicu (domyślnie ~ = ~1)
+    public class AncestorCountModifier : IRevisionModifier
+    {
+        public int Count { get; }
+
+        public AncestorCountModifier(int count = 1)
+        {
+            if (count < 0) throw new ArgumentException("Count must be non-negative");
+            Count = count;
+        }
+
+        public IEnumerable<string> Apply(Repository repo, IEnumerable<string> inputHashes)
+        {
+            foreach (var h in inputHashes)
+            {
+                var currentHash = h;
+                Commit current = repo.GetCommitOrThrow(currentHash);
+                int steps = Count;
+                while (steps-- > 0)
+                {
+                    if (current.ParentHashes.Count == 0)
+                        throw new InvalidOperationException($"Commit '{current.Hash}' has no parent");
+                    var nextHash = current.ParentHashes[0];
+                    current = repo.GetCommitOrThrow(nextHash);
+                }
+                yield return current.Hash;
+            }
+        }
+    }
+
+    // Klasa reprezentująca sparsowany pattern (np. HEAD~3^2~1)
+    public class Revision
+    {
+        public string BaseRef { get; }
+        public List<IRevisionModifier> Modifiers { get; }
+
+        private Revision(string baseRef, IEnumerable<IRevisionModifier> modifiers)
+        {
+            BaseRef = baseRef;
+            Modifiers = modifiers?.ToList() ?? new List<IRevisionModifier>();
+        }
+
+        // Parser prostego wzorca: BaseRef (hash|branch|HEAD) (('~'N?) | ('^'N?))* 
+        // ~N : N domyślnie 1
+        // ^N : N domyślnie 1 (oznacza numer rodzica, 1-based)
+        public static Revision Parse(string pattern)
+        {
+            if (string.IsNullOrWhiteSpace(pattern))
+                throw new ArgumentException("Pattern must not be empty");
+
+            int i = 0;
+            int len = pattern.Length;
+
+            // czytamy BaseRef jako ciąg znaków do pierwszego ^ lub ~ lub końca
+            int start = i;
+            while (i < len && pattern[i] != '^' && pattern[i] != '~') i++;
+            var baseRef = pattern[start..i];
+            if (string.IsNullOrEmpty(baseRef))
+                throw new ArgumentException("BaseRef cannot be empty");
+
+            var modifiers = new List<IRevisionModifier>();
+
+            while (i < len)
+            {
+                char c = pattern[i++];
+                if (c == '~')
+                {
+                    // odczytaj liczbę (może być wielocyfrowa) lub domyślnie 1
+                    int num = ReadNumber(pattern, ref i);
+                    if (num < 0) num = 1;
+                    modifiers.Add(new AncestorCountModifier(num));
+                }
+                else if (c == '^')
+                {
+                    int num = ReadNumber(pattern, ref i);
+                    if (num < 0) num = 1;
+                    modifiers.Add(new ParentIndexModifier(num));
+                }
+                else
+                {
+                    throw new ArgumentException($"Invalid modifier symbol '{c}' in pattern");
+                }
+            }
+
+            return new Revision(baseRef, modifiers);
+        }
+
+        // Helper: odczytuje liczbę począwszy od index i; jeśli brak cyfry zwraca -1 i nie przesuwa i.
+        private static int ReadNumber(string s, ref int i)
+        {
+            int len = s.Length;
+            if (i >= len || !char.IsDigit(s[i]))
+                return -1;
+
+            int start = i;
+            while (i < len && char.IsDigit(s[i])) i++;
+            var numStr = s[start..i];
+            return int.Parse(numStr);
+        }
+    }
+
+    // Przykład użycia
+    class Program
+    {
+        static void Main()
+        {
+            var repo = new Repository();
+
+            // tworzymy przykładowe commity (hashy proste dla czytelności)
+            // commit graph:
+            // A <- B <- C <- D
+            //       \ 
+            //        E (merge parent of C)
+            // F <- G (innej gałęzi)
+            repo.Objects["A"] = new Commit("A"); // root
+            repo.Objects["B"] = new Commit("B", new[] { "A" });
+            repo.Objects["E"] = new Commit("E", new[] { "B" });
+            repo.Objects["C"] = new Commit("C", new[] { "B", "E" }); // C ma dwóch rodziców: B (pierwszy), E (drugi)
+            repo.Objects["D"] = new Commit("D", new[] { "C" });
+
+            repo.Objects["F"] = new Commit("F");
+            repo.Objects["G"] = new Commit("G", new[] { "F" });
+
+            // gałęzie
+            repo.Branches["master"] = "D";
+            repo.Branches["feature"] = "G";
+
+            // HEAD wskazuje na master
+            repo.HEAD = "D";
+
+            // --- Przykłady działania ---
+
+            Console.WriteLine("TraverseBranchByFirstParent starting from HEAD:");
+            foreach (var c in repo.TraverseBranchByFirstParent(null))
+            {
+                Console.WriteLine(c.Hash);
+            }
+            // oczekiwane: D, C, B, A
+
+            Console.WriteLine();
+            // Przykłady wzorców:
+            DisplayTraverse(repo, "HEAD");         // D
+            DisplayTraverse(repo, "HEAD~1");      // C
+            DisplayTraverse(repo, "HEAD~2");      // B
+            DisplayTraverse(repo, "master~3");    // A
+            DisplayTraverse(repo, "master^");     // C (pierwszy rodzic)
+            DisplayTraverse(repo, "master^2");    // Błędne wg naszego grafu? master->D^2 => D ma tylko 1 rodzica => wyjątek
+            // Przykład z merge: C^2 -> E
+            DisplayTraverse(repo, "C^2");
+            // Złożony: HEAD~1^2 -> C~1^2  => weź HEAD~1 = C, C^2 = drugi rodzic E
+            DisplayTraverse(repo, "HEAD~1^2");
+            // Łańcuch: HEAD~1^2~1  => (HEAD~1) = C, ^2 -> E, ~1 -> B
+            DisplayTraverse(repo, "HEAD~1^2~1");
+        }
+
+        static void DisplayTraverse(Repository repo, string pattern)
+        {
+            try
+            {
+                Console.Write($"{pattern} -> ");
+                var commits = repo.TraverseByRevision(pattern).ToList();
+                Console.WriteLine(string.Join(", ", commits.Select(c => c.Hash)));
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"ERROR: {ex.Message}");
+            }
+        }
+    }
+}
