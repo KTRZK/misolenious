@@ -1,0 +1,113 @@
+# ADAPTATION_MATRIX — mapping exam requirements → files & quick edits
+
+This document maps **likely exam tasks and variants** to the exact files and edit points in the prepared repository. Use it during the exam to quickly locate where to change behavior (usually a single constant or to paste a short snippet). Each row lists: the *task*, the *file(s)* to edit, the *marker / exact code to change*, and *quick test command*.
+
+> **How to use**: open this file, find the scenario closest to the exam prompt, then use the indicated file and marker. When possible, prefer editing `// EXAM_CONFIG` constants; only paste snippets if logic must change.
+
+---
+
+## Legend
+
+* **File** — path relative to repo root
+* **Marker** — the comment or exact text you should search for (Ctrl+Shift+F) to jump to the edit point
+* **Edit** — the minimal change to make to satisfy the exam prompt
+* **Quick test** — command to run a single demo or `dotnet test` to validate
+
+---
+
+## 1) LINQ / EnumerableExtensions variants
+
+| Scenario                                                                   | File                                              | Marker                                                              | Edit                                                                                                                                                  | Quick test                               |
+| -------------------------------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| Change Batch padding policy (SkipPartial / ReturnPartial / PadWithDefault) | `src/LinqExtensions/EnumerableExtensions.Base.cs` | `// EXAM_CONFIG` and `public const PadPolicy BatchDefaultPadPolicy` | Replace policy value, e.g. `PadPolicy.ReturnPartial` → `PadPolicy.PadWithDefault` or run `./tools/quick-edit.sh BatchDefaultPadPolicy PadWithDefault` | `dotnet run --project src --demo linext` |
+| Change default batch capacity hint                                         | same                                              | `public const int BatchDefaultCapacityHint`                         | set numeric value                                                                                                                                     | `dotnet run --project src --demo linext` |
+| Make Batch overlapping (step != size)                                      | `src/LinqExtensions/EnumerableExtensions.Base.cs` | method `Batch(size, step: ...)` overload                            | Call `collection.Batch(size, step: 1)` in exercise code or paste `Batch` variant snippet from `snippets/`                                             | run linext demo                          |
+| SlidingWindow with step > 1 or padding                                     | same                                              | `SlidingWindow(..., int step = 1, PadPolicy pad = ...)`             | change step argument where called or paste snippet for `SlidingWindow(..., step:2, pad:PadPolicy.PadWithDefault)`                                     | linext demo                              |
+| Implement FoldRight instead of Fold                                        | `src/LinqExtensions/EnumerableExtensions.Base.cs` | `FoldRight` method                                                  | If required, call `FoldRight` in your solution (one line change); or copy overload snippet from `snippets/`                                           | linext demo                              |
+
+---
+
+## 2) ArrayBinaryTree (array-backed tree) variants
+
+| Scenario                                                       | File                                                                          | Marker                                                         | Edit                                                                                                                                       | Quick test                             |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
+| Standard solution (root at index 0, InOrder traversal)         | `src/DataStructures/ArrayBinaryTree.Base.cs`                                  | `// EXAM_TODO: switch traversal` & `return InOrder(RootIndex)` | No change — default implementation uses InOrder.                                                                                           | `dotnet run --project src --demo tree` |
+| Use 1-based indexing (rare variant)                            | `src/DataStructures/ArrayBinaryTree.Base.cs`                                  | `public const int IndexBase = 0;`                              | Change to `1` or run `./tools/quick-edit.sh IndexBase 1` (also verify children formulas)                                                   | run tree demo                          |
+| Resize strategy Exact instead of Double                        | same                                                                          | `public const ResizeStrategy ResizeMode`                       | Change to `ResizeStrategy.Exact` or `./tools/quick-edit.sh ResizeMode Exact`                                                               | tree demo                              |
+| When child added to non-existing parent: auto-create parent(s) | same                                                                          | `public const MissingParentBehavior ParentBehavior`            | Change to `MissingParentBehavior.AutoCreate`                                                                                               | tree demo                              |
+| Sparse huge indexes (very large child index)                   | `src/DataStructures/ArrayBinaryTree.Variant_SparseDictionary.cs`              | `// EXAM_VARIANT: UseSparse`                                   | Replace usage of `ArrayBinaryTree` with `SparseDictionary` variant in your solution file; minimal change: `new SparseArrayBinaryTree<T>()` | tree-sparse demo (exists)              |
+| Return PreOrder instead of InOrder                             | `src/DataStructures/ArrayBinaryTree.Base.cs`                                  | `return InOrder(RootIndex).GetEnumerator();`                   | Change to `PreOrder(RootIndex).GetEnumerator();` or `./tools/quick-edit.sh Traversal PreOrder` if such key is configured                   | tree demo                              |
+| Iterative InOrder required (no recursion)                      | `src/DataStructures/ArrayBinaryTree.Base.cs`                                  | `ManualEnumerator` class                                       | Replace iterator in `GetEnumerator()` with `return new ManualEnumerator(this);` (1-line swap)                                              | tree demo                              |
+| Implement Remove(index) or Remove subtree                      | Add file: `src/DataStructures/ArrayBinaryTree.Variant_Remove.cs` or edit base | `// EXAM_TODO` near setters                                    | Copy prepared remove snippet (already in `variants`)                                                                                       | run tests                              |
+| Serialize / Deserialize tree                                   | Use `ToString()` / dump helper or `DumpExisting()`                            | `DumpExisting` method available                                | Call `tree.DumpExisting()` and JSON serialize the result                                                                                   | quick demo                             |
+
+---
+
+## 3) Movie DB LINQ queries — mapping common exam asks to files
+
+| Scenario                                                    | File                                      | Marker                                                          | Edit                                                                                                                | Quick test                               |
+| ----------------------------------------------------------- | ----------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| Change rating threshold for Query 3                         | `src/Movies/DatabaseQueries.Base.cs`      | `public const int RatingThresholdDefault`                       | Change value or use `./tools/quick-edit.sh RatingThresholdDefault 7`                                                | `dotnet run --project src --demo movies` |
+| Treat movies with no ratings as Average = 0 vs ignore       | `DatabaseQueries.Base.cs`                 | in `RecentMoviesWithAverageRating` or `HighRatedMoviesWithCast` | Adjust `movieRatings.Any() ? movieRatings.Average(...) : 0.0` to `null` or other policy; use EXAM_CONFIG if present | demo movies                              |
+| TopN including ties                                         | `DatabaseQueries.Base.cs`                 | `IncludeTiesInTopN` constant                                    | Toggle `IncludeTiesInTopN` or pass includeTies=true to `TopNMoviesByRatingCount`                                    | demo movies                              |
+| Return all ties for "longest movie per genre"               | `LongestMoviesByGenre_AllTies`            | method `LongestMoviesByGenre_AllTies` exists                    | Call that method instead of base variant                                                                            | demo movies                              |
+| Weighted average / recency weighting                        | `DatabaseQueries.Base.cs`                 | `WeightedAverageByRecency` snippet                              | Use that helper in `HighRatedMoviesWithCast` or create variant `HighRatedWeighted`                                  | demo movies                              |
+| Use explicit dictionaries for joins to optimize             | `DatabaseQueries.Base.cs`                 | helper `MoviesById` / `ActorsById`                              | Replace Join with dictionary lookups for faster runtime in large dataset                                            | `dotnet run` with large dataset          |
+| Use ReleaseDate (DateTime) rather than Year-based filtering | `DatabaseQueries.Base.cs`                 | `ReferenceDate` & `thresholdYear`                               | Modify `Where(m => m.Year > thresholdYear)` to use `ReleaseDate` comparisons (example snippet in `query-snippets`)  | demo movies                              |
+| Output CSV or specific JSON schema                          | `DatabaseQueries.Base.cs` or `Program.cs` | `DisplayQueryResults` method                                    | Replace JSON serializer with CSV writer or custom serializer (1–2 lines)                                            | demo movies                              |
+
+---
+
+## 4) Git-like tasks — mapping
+
+| Scenario                            | File                             | Marker                                    | Edit                                                           | Quick test        |
+| ----------------------------------- | -------------------------------- | ----------------------------------------- | -------------------------------------------------------------- | ----------------- |
+| Top authors by commit count (top N) | `src/GitLike/GitQueries.Base.cs` | `TopAuthorsByCommitCount` snippet         | Use variant that includes ties or not; adjust `topN` parameter | run git-like demo |
+| Commits per day / histogram         | same                             | `AuthorActivityHistogram` snippet         | Call histogram function with desired period                    | run demo          |
+| Exclude merge commits               | same                             | `IncludeMergeCommits` config (if present) | Toggle flag or filter `Commit.IsMerge`                         | run demo          |
+
+---
+
+## 5) Quick-edit script usage
+
+If you prefer not to open files to change constants manually, use the quick-edit utility. Example:
+
+```bash
+# change rating threshold to 7
+./tools/quick-edit.sh RatingThresholdDefault 7
+
+# switch resize strategy for tree to Exact
+./tools/quick-edit.sh ResizeMode Exact
+
+# toggle batch default policy
+./tools/quick-edit.sh BatchDefaultPadPolicy PadWithDefault
+```
+
+After running quick-edit monitor output and run:
+
+```bash
+./tools/run-all.sh   # builds, tests, runs demos
+```
+
+---
+
+## 6) Common error patterns and where to fix them quickly
+
+* **Average() on empty sequence**: edit corresponding query to use `.Any() ? .Average() : 0.0` or use `DefaultIfEmpty()` pattern. File: `src/Movies/DatabaseQueries.Base.cs`.
+* **IndexOutOfRange adding child**: ensure `EnsureCapacity(index)` in `ArrayBinaryTree.Base.cs` is present and ResizeMode behavior appropriate. Use `ResizeMode.Exact` for deterministic sizes.
+* **Method group misuse (GetEnumerator without parentheses)**: check `ArrayBinaryTree.Base.cs` `GetEnumerator()` implementation; ensure `.GetEnumerator()` invoked.
+* **Performance issues (joins on large lists)**: use `ToDictionary()` helpers in `DatabaseQueries.Base.cs`.
+
+---
+
+## 7) Quick checklist during exam
+
+1. Identify task type (LINQ / tree / git-like).
+2. Ctrl+Shift+F for `EXAM_CONFIG` and `EXAM_TODO` markers.
+3. If it's a param change (threshold, size, traversal), use `tools/quick-edit.sh` or edit the constant directly.
+4. If logic must be changed (e.g. step parameter, new traversal), paste short snippet from `src/.../snippets` into target file and run tests.
+5. Run `./tools/run-all.sh` and copy output to exam system.
+
+---
+
+This matrix is intentionally compact and actionable. Keep this file open during the exam and use it as your canonical map from prompt → file → minimal edit → test command. If you want, I can now generate `docs/SNIPPETS.md` with ready-to-copy code blocks (TopNWithTies, IterativeInOrder, Batch step, SlidingWindow pad variants, manual IEnumerator skeleton). Which file should I generate next?
