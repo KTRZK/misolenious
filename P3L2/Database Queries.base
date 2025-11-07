@@ -1,0 +1,358 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using ExamMaterials.DataStructures; // reference to tree templates if needed
+
+// EXAM_VARIANT: DatabaseQueries.Base
+// Purpose: base implementations and configurable variants for the Movie Database LINQ tasks.
+// NOTE: If you already have DatabaseQueries implemented from the provided assignments,
+//       treat this file as an extended toolkit: it contains safe, well-commented query patterns,
+//       multiple policy variants, EXAM_CONFIG toggles and helper snippets intended for quick exam edits.
+
+namespace ExamMaterials.Movies
+{
+    public interface IMovieDatabase
+    {
+        List<Movie> Movies { get; }
+        List<Actor> Actors { get; }
+        List<Rating> Ratings { get; }
+        List<Cast> Casts { get; }
+    }
+
+    public static class DatabaseQueries
+    {
+        // EXAM_CONFIG: global parameters you can change quickly during the exam
+        public const int RatingThresholdDefault = 8;
+        public const int RecentYearsDefault = 5;
+        public static DateTime? ReferenceDate = null; // if null -> DateTime.Now; set to fixed date for deterministic tests
+        public const int TopNDefault = 3;
+        public const bool IncludeTiesInTopN = false; // when true, TopN returns ties as well
+
+        #region Display helper
+        public static void DisplayQueryResults<T>(T query)
+        {
+            var options = new JsonSerializerOptions
+            {
+                WriteIndented = true
+            };
+
+            options.Converters.Add(new JsonStringEnumConverter());
+
+            var json = JsonSerializer.Serialize(query, options);
+
+            Console.WriteLine(json);
+        }
+        #endregion
+
+        #region Query helpers (common patterns)
+        // Build lookup dictionaries to speed up joins in large datasets
+        private static Dictionary<int, Movie> MoviesById(IMovieDatabase db) => db.Movies.ToDictionary(m => m.Id);
+        private static Dictionary<int, Actor> ActorsById(IMovieDatabase db) => db.Actors.ToDictionary(a => a.Id);
+
+        // Safe average: returns nullable double if sequence empty
+        private static double? SafeAverage(IEnumerable<int> seq)
+        {
+            if (seq == null) return null;
+            var any = seq.Any();
+            return any ? seq.Average() : (double?)null;
+        }
+
+        // TopN including ties pattern
+        private static IEnumerable<TResult> TopNWithTies<TSource, TKey, TResult>(IEnumerable<TSource> items,
+            Func<TSource, TKey> keySelector,
+            Func<IGrouping<TKey, TSource>, TResult> projector,
+            int n) where TKey : IComparable
+        {
+            var groups = items.GroupBy(keySelector)
+                              .OrderByDescending(g => g.Count())
+                              .ToList();
+            if (!groups.Any()) return Enumerable.Empty<TResult>();
+
+            var top = groups.Take(n).ToList();
+            if (groups.Count <= n) return top.Select(projector);
+
+            int threshold = top.Last().Count();
+            return groups.Where(g => g.Count() >= threshold).Select(projector);
+        }
+        #endregion
+
+        #region Query 1: Actors from Fantasy Movies (variants)
+        // Default: return List<Actor>
+        public static void ActorsFromFantasyMovies(this IMovieDatabase movieDatabase, Genre filterGenre = Genre.Fantasy)
+        {
+            // Use a join between casts and movies (filtered), distinct actorIds, then join to actors.
+            var movies = movieDatabase.Movies;
+            var actors = movieDatabase.Actors;
+            var casts = movieDatabase.Casts;
+
+            var queryResult = casts
+                .Join(movies.Where(m => m.Genre == filterGenre),
+                      cast => cast.MovieId,
+                      movie => movie.Id,
+                      (cast, movie) => cast.ActorId)
+                .Distinct()
+                .Join(actors,
+                      actorId => actorId,
+                      actor => actor.Id,
+                      (actorId, actor) => actor)
+                .ToList();
+
+            Console.WriteLine($"Actors From {filterGenre} Movies");
+            DisplayQueryResults(queryResult);
+            Console.WriteLine();
+        }
+        #endregion
+
+        #region Query 2: Longest movie by genre
+        // Default: return one movie per genre (first encountered when multiple tie)
+        public static void LongestMovieByGenre(this IMovieDatabase movieDatabase)
+        {
+            var movies = movieDatabase.Movies;
+
+            var queryResult = movies
+                .GroupBy(m => m.Genre)
+                .Select(g => new
+                {
+                    Genre = g.Key,
+                    Movie = g.OrderByDescending(m => m.DurationMinutes).FirstOrDefault()
+                })
+                .ToList();
+
+            Console.WriteLine("Longest Movie By Genre");
+            DisplayQueryResults(queryResult);
+            Console.WriteLine();
+        }
+
+        // Variant: return all movies that tie for maximum length per genre
+        public static void LongestMoviesByGenre_AllTies(this IMovieDatabase movieDatabase)
+        {
+            var movies = movieDatabase.Movies;
+
+            var queryResult = movies
+                .GroupBy(m => m.Genre)
+                .Select(g => new
+                {
+                    Genre = g.Key,
+                    MaxDuration = g.Max(m => m.DurationMinutes),
+                    Movies = g.Where(m => m.DurationMinutes == g.Max(x => x.DurationMinutes)).ToList()
+                })
+                .ToList();
+
+            Console.WriteLine("Longest Movies By Genre (all ties)");
+            DisplayQueryResults(queryResult);
+            Console.WriteLine();
+        }
+        #endregion
+
+        #region Query 3: High rated movies with cast
+        public static void HighRatedMoviesWithCast(this IMovieDatabase movieDatabase, int threshold = RatingThresholdDefault)
+        {
+            var movies = movieDatabase.Movies;
+            var actors = movieDatabase.Actors;
+            var ratings = movieDatabase.Ratings;
+            var casts = movieDatabase.Casts;
+
+            var movieAverages = ratings
+                .GroupBy(r => r.MovieId)
+                .Select(g => new { MovieId = g.Key, Average = g.Average(r => r.Score) })
+                .Where(x => x.Average > threshold)
+                .ToList();
+
+            var result = movieAverages
+                .Join(movies, r => r.MovieId, m => m.Id, (r, m) => new { Movie = m, r.Average })
+                .GroupJoin(casts, m => m.Movie.Id, c => c.MovieId, (m, cs) => new
+                {
+                    m.Movie,
+                    m.Average,
+                    CastIds = cs.Select(c => c.ActorId)
+                })
+                .Select(x => new
+                {
+                    x.Movie,
+                    x.Average,
+                    Cast = x.CastIds.Join(actors, id => id, a => a.Id, (id, a) => a).ToList()
+                })
+                .ToList();
+
+            Console.WriteLine($"High Rated Movies With Cast (avg > {threshold})");
+            DisplayQueryResults(result);
+            Console.WriteLine();
+        }
+        #endregion
+
+        #region Query 4: Distinct roles count per actor
+        public static void DistinctRolesCountPerActor(this IMovieDatabase movieDatabase)
+        {
+            var actors = movieDatabase.Actors;
+            var casts = movieDatabase.Casts;
+
+            var queryResult = actors
+                .GroupJoin(casts, actor => actor.Id, cast => cast.ActorId,
+                    (actor, actorCasts) => new
+                    {
+                        Actor = actor,
+                        Roles = actorCasts.Select(c => c.Role).Distinct().Count()
+                    })
+                .OrderByDescending(x => x.Roles)
+                .ToList();
+
+            Console.WriteLine("Distinct Roles Count Per Actor");
+            DisplayQueryResults(queryResult);
+            Console.WriteLine();
+        }
+        #endregion
+
+        #region Query 5: Recent movies with average rating
+        public static void RecentMoviesWithAverageRating(this IMovieDatabase movieDatabase, int pastYears = RecentYearsDefault)
+        {
+            var movies = movieDatabase.Movies;
+            var ratings = movieDatabase.Ratings;
+
+            var refDate = ReferenceDate ?? DateTime.Now;
+            var thresholdYear = refDate.Year - pastYears;
+
+            var result = movies
+                .Where(m => m.Year > thresholdYear)
+                .GroupJoin(ratings, m => m.Id, r => r.MovieId,
+                    (m, rr) => new
+                    {
+                        Movie = m,
+                        AverageScore = rr.Any() ? rr.Average(x => x.Score) : 0.0
+                    })
+                .OrderByDescending(x => x.AverageScore)
+                .ToList();
+
+            Console.WriteLine($"Recent Movies With Average Rating (last {pastYears} years relative to {refDate.Date.ToShortDateString()})");
+            DisplayQueryResults(result);
+            Console.WriteLine();
+        }
+        #endregion
+
+        #region Query 6: Average rating by genre
+        public static void AverageRatingByGenre(this IMovieDatabase movieDatabase)
+        {
+            var movies = movieDatabase.Movies;
+            var ratings = movieDatabase.Ratings;
+
+            var queryResult = ratings
+                .Join(movies, rating => rating.MovieId, movie => movie.Id,
+                      (rating, movie) => new { movie.Genre, rating.Score })
+                .GroupBy(x => x.Genre)
+                .Select(g => new { Genre = g.Key, AverageScore = g.Select(x => x.Score).Average() })
+                .ToList();
+
+            Console.WriteLine("Average Rating By Genre");
+            DisplayQueryResults(queryResult);
+            Console.WriteLine();
+        }
+        #endregion
+
+        #region Query 7: Actors who never played in Thriller
+        public static void ActorsWhoNeverPlayedInThriller(this IMovieDatabase movieDatabase, Genre thrillerGenre = Genre.Thriller)
+        {
+            var movies = movieDatabase.Movies;
+            var casts = movieDatabase.Casts;
+            var actors = movieDatabase.Actors;
+
+            var thrillerIds = movies.Where(m => m.Genre == thrillerGenre).Select(m => m.Id).ToHashSet();
+            var thrillerActors = casts.Where(c => thrillerIds.Contains(c.MovieId)).Select(c => c.ActorId).ToHashSet();
+
+            var queryResult = actors.Where(a => !thrillerActors.Contains(a.Id)).ToList();
+
+            Console.WriteLine("Actors Who Never Played In Thriller");
+            DisplayQueryResults(queryResult);
+            Console.WriteLine();
+        }
+        #endregion
+
+        #region Query 8: Top N movies by rating count
+        public static void TopNMoviesByRatingCount(this IMovieDatabase movieDatabase, int topN = TopNDefault, bool includeTies = IncludeTiesInTopN)
+        {
+            var movies = movieDatabase.Movies;
+            var ratings = movieDatabase.Ratings;
+
+            var groups = ratings.GroupBy(r => r.MovieId).Select(g => new { MovieId = g.Key, Count = g.Count() }).ToList();
+            if (!groups.Any())
+            {
+                Console.WriteLine("Top movies by rating count: no ratings found");
+                return;
+            }
+
+            var ordered = groups.OrderByDescending(g => g.Count).ToList();
+            if (!includeTies)
+            {
+                var top = ordered.Take(topN).Select(g => movies.First(m => m.Id == g.MovieId)).ToList();
+                DisplayQueryResults(top);
+            }
+            else
+            {
+                var topGroups = ordered.Take(topN).ToList();
+                var threshold = topGroups.Last().Count;
+                var topWithTies = ordered.Where(g => g.Count >= threshold).Select(g => movies.First(m => m.Id == g.MovieId)).ToList();
+                DisplayQueryResults(topWithTies);
+            }
+
+            Console.WriteLine();
+        }
+        #endregion
+
+        #region Query 9: Movies without ratings
+        public static void MoviesWithoutRatings(this IMovieDatabase movieDatabase)
+        {
+            var movies = movieDatabase.Movies;
+            var ratings = movieDatabase.Ratings;
+
+            var queryResult = movies
+                .GroupJoin(ratings, m => m.Id, r => r.MovieId, (m, rr) => new { Movie = m, HasRatings = rr.Any() })
+                .Where(x => !x.HasRatings)
+                .Select(x => x.Movie)
+                .ToList();
+
+            Console.WriteLine("Movies Without Ratings");
+            DisplayQueryResults(queryResult);
+            Console.WriteLine();
+        }
+        #endregion
+
+        #region Query 10: Most versatile actors
+        public static void MostVersatileActors(this IMovieDatabase movieDatabase)
+        {
+            var movies = movieDatabase.Movies;
+            var actors = movieDatabase.Actors;
+            var casts = movieDatabase.Casts;
+
+            var queryResult = casts
+                .Join(movies, c => c.MovieId, m => m.Id, (c, m) => new { c.ActorId, m.Genre })
+                .GroupBy(x => x.ActorId)
+                .Select(g => new { ActorId = g.Key, GenreCount = g.Select(x => x.Genre).Distinct().Count() })
+                .Join(actors, x => x.ActorId, a => a.Id, (x, a) => new { Actor = a, x.GenreCount })
+                .OrderByDescending(x => x.GenreCount)
+                .ToList();
+
+            Console.WriteLine("Most Versatile Actors");
+            DisplayQueryResults(queryResult);
+            Console.WriteLine();
+        }
+        #endregion
+
+        #region Extra utility queries and variants (snippets)
+        // EXAM_SNIPPETS: ready-to-copy variants
+        // - Weighted average by decay (example)
+        // - TopNWithTies as separate utility
+        // - Returning DTO vs anonymous type
+
+        // Example: Weighted average where newer ratings count more
+        public static double WeightedAverageByRecency(IEnumerable<Rating> ratings, DateTime referenceDate)
+        {
+            // simple exponential decay weight: w = e^{-lambda * days}
+            const double lambda = 0.01; // EXAM_CONFIG could expose this
+            var weighted = ratings.Select(r => new { r.Score, Weight = Math.Exp(-lambda * (referenceDate - r.CreatedAt).TotalDays) });
+            var sumWeights = weighted.Sum(x => x.Weight);
+            if (sumWeights == 0) return 0.0;
+            return weighted.Sum(x => x.Score * x.Weight) / sumWeights;
+        }
+        #endregion
+    }
+}
