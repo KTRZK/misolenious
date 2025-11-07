@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# EXAM_TOOL: quick-edit.sh
+# Usage: ./tools/quick-edit.sh <key> <value>
+# Examples:
+#   ./tools/quick-edit.sh RatingThresholdDefault 7
+#   ./tools/quick-edit.sh ResizeMode Exact
+#   ./tools/quick-edit.sh Traversal InOrder
+# This script performs simple regex replacements for EXAM_CONFIG constants across the repo.
+# It is intentionally conservative: it only replaces whole-identifier assignments like:
+#   public const int RatingThresholdDefault = 8;
+# or
+#   public const ResizeStrategy ResizeMode = ResizeStrategy.Double;
+# and similar patterns. Always run tests after changes: ./tools/run-all.sh
+
+set -euo pipefail
+shopt -s extglob
+
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+SEARCH_DIR="$ROOT_DIR/src"
+
+if [ "$#" -lt 2 ]; then
+  echo "Usage: $0 <Key> <Value>"
+  echo "E.g.: $0 RatingThresholdDefault 7"
+  exit 2
+fi
+
+KEY="$1"
+VALUE="$2"
+
+# Map of keys to files/patterns where to edit (you can extend this map with more keys as needed)
+# Each entry: key|file|regex_pattern|replacement_template
+# regex_pattern must contain a single capture group for the right-hand side value (ignored), replacement_template uses \1 for captured group and %s for the new value
+MAP=(
+  "RatingThresholdDefault|src/Movies/DatabaseQueries.Base.cs|public const int RatingThresholdDefault = [0-9]+;|public const int RatingThresholdDefault = %s;"
+  "RecentYearsDefault|src/Movies/DatabaseQueries.Base.cs|public const int RecentYearsDefault = [0-9]+;|public const int RecentYearsDefault = %s;"
+  "TopNDefault|src/Movies/DatabaseQueries.Base.cs|public const int TopNDefault = [0-9]+;|public const int TopNDefault = %s;"
+  "IncludeTiesInTopN|src/Movies/DatabaseQueries.Base.cs|public const bool IncludeTiesInTopN = (true|false);|public const bool IncludeTiesInTopN = %s;"
+  "ResizeMode|src/DataStructures/ArrayBinaryTree.Base.cs|public const ResizeStrategy ResizeMode = ResizeStrategy\.[A-Za-z]+;|public const ResizeStrategy ResizeMode = ResizeStrategy.%s;"
+  "ParentBehavior|src/DataStructures/ArrayBinaryTree.Base.cs|public const MissingParentBehavior ParentBehavior = MissingParentBehavior\.[A-Za-z]+;|public const MissingParentBehavior ParentBehavior = MissingParentBehavior.%s;"
+  "IndexBase|src/DataStructures/ArrayBinaryTree.Base.cs|public const int IndexBase = [0-9]+;|public const int IndexBase = %s;"
+  "BatchDefaultPadPolicy|src/LinqExtensions/EnumerableExtensions.Base.cs|public const PadPolicy BatchDefaultPadPolicy = PadPolicy\.[A-Za-z]+;|public const PadPolicy BatchDefaultPadPolicy = PadPolicy.%s;"
+  "BatchDefaultCapacityHint|src/LinqExtensions/EnumerableExtensions.Base.cs|public const int BatchDefaultCapacityHint = [0-9]+;|public const int BatchDefaultCapacityHint = %s;"
+)
+
+FOUND=0
+for entry in "${MAP[@]}"; do
+  IFS='|' read -r mapkey mapfile mappattern mapreplace <<< "$entry"
+  if [ "$mapkey" = "$KEY" ]; then
+    FILEPATH="$ROOT_DIR/$mapfile"
+    if [ ! -f "$FILEPATH" ]; then
+      echo "Target file $FILEPATH not found. Aborting." >&2
+      exit 3
+    fi
+
+    # Create a backup
+    cp "$FILEPATH" "$FILEPATH.bak"
+
+    # Use perl for regexp replacement with file in-place edit
+    perl -0777 -pe "s/$mappattern/sprintf('$mapreplace', '$VALUE')/ge" -i "$FILEPATH"
+
+    echo "Replaced $KEY in $mapfile -> $VALUE"
+    FOUND=1
+    break
+  fi
+done
+
+if [ $FOUND -eq 0 ]; then
+  echo "Key '$KEY' not found in map. See tools/quick-edit.sh MAP for supported keys." >&2
+  exit 4
+fi
+
+# Optionally run quick build
+if [ "${RUN_AFTER_CHANGE:-1}" -eq 1 ]; then
+  echo "Building project to validate changes..."
+  (cd "$ROOT_DIR" && dotnet build)
+fi
+
+echo "Done. Please run ./tools/run-all.sh to execute demos/tests." 
