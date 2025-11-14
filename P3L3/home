@@ -1,0 +1,399 @@
+# Gotowe snippety i instrukcje — krok po kroku
+
+Poniżej masz kompletny, praktyczny zestaw snippetów i instrukcji (w C#) pozwalający zrealizować schemat: *plik się zmienił → klasa obserwująca wykrywa zmianę → segreguję pliki tworząc katalogi `rok/miesiąc` → wysyłam powiadomienie do interfejsu (SignalR)*. Kod jest gotowy do wklejenia do projektu .NET (konsolowego lub ASP.NET Core). Wszystko opisane krok po kroku.
+
+---
+
+# 1. Klasa danych zdarzenia (`FileChangedEventArgs`)
+
+Używamy `EventArgs` by przekazywać informacje o zdarzeniu.
+
+```csharp
+using System;
+using System.IO;
+
+namespace FileWatcherLib
+{
+    public class FileChangedEventArgs : EventArgs
+    {
+        public string FullPath { get; }
+        public string Name { get; }
+        public WatcherChangeTypes ChangeType { get; }
+        public DateTime TimestampUtc { get; }
+
+        public FileChangedEventArgs(string fullPath, string name, WatcherChangeTypes changeType)
+        {
+            FullPath = fullPath;
+            Name = name;
+            ChangeType = changeType;
+            TimestampUtc = DateTime.UtcNow;
+        }
+    }
+}
+```
+
+---
+
+# 2. Klasa obserwująca (encapsulacja `FileSystemWatcher`)
+
+Ta klasa emituje zdarzenia (`event EventHandler<FileChangedEventArgs>`) i ma wbudowane: debounce, obsługę błędów, `Dispose()`.
+
+```csharp
+using System;
+using System.Collections.Concurrent;
+using System.IO;
+using System.Threading;
+using Microsoft.Extensions.Logging;
+
+namespace FileWatcherLib
+{
+    public class DirectoryObserver : IDisposable
+    {
+        private readonly FileSystemWatcher _watcher;
+        private readonly ILogger? _logger;
+        private readonly ConcurrentDictionary<string, DateTime> _lastSeen = new();
+        private readonly TimeSpan _debounce;
+
+        public event EventHandler<FileChangedEventArgs>? FileChanged;
+
+        public DirectoryObserver(string path, string filter = "*.*", bool includeSubdirectories = false, TimeSpan? debounce = null, ILogger? logger = null)
+        {
+            _logger = logger;
+            _debounce = debounce ?? TimeSpan.FromMilliseconds(200);
+
+            _watcher = new FileSystemWatcher(path, filter)
+            {
+                IncludeSubdirectories = includeSubdirectories,
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.CreationTime | NotifyFilters.Size
+            };
+
+            _watcher.Created += OnCreated;
+            _watcher.Changed += OnChanged;
+            _watcher.Deleted += OnDeleted;
+            _watcher.Renamed += OnRenamed;
+            _watcher.Error += OnError;
+
+            _watcher.EnableRaisingEvents = true;
+            _logger?.LogInformation("DirectoryObserver started on {path}", Path.GetFullPath(path));
+        }
+
+        private bool ShouldProcess(string path)
+        {
+            var now = DateTime.UtcNow;
+            var last = _lastSeen.GetOrAdd(path, DateTime.MinValue);
+            if ((now - last) < _debounce) return false;
+            _lastSeen[path] = now;
+            return true;
+        }
+
+        protected virtual void RaiseFileChanged(FileChangedEventArgs e)
+        {
+            FileChanged?.Invoke(this, e);
+        }
+
+        private void OnCreated(object sender, FileSystemEventArgs e)
+        {
+            if (!ShouldProcess(e.FullPath)) return;
+            _logger?.LogDebug("OnCreated: {path}", e.FullPath);
+            RaiseFileChanged(new FileChangedEventArgs(e.FullPath, e.Name, e.ChangeType));
+        }
+
+        private void OnChanged(object sender, FileSystemEventArgs e)
+        {
+            if (e.ChangeType != WatcherChangeTypes.Changed) return;
+            if (!ShouldProcess(e.FullPath)) return;
+            _logger?.LogDebug("OnChanged: {path}", e.FullPath);
+            RaiseFileChanged(new FileChangedEventArgs(e.FullPath, e.Name, e.ChangeType));
+        }
+
+        private void OnDeleted(object sender, FileSystemEventArgs e)
+        {
+            if (!ShouldProcess(e.FullPath)) return;
+            _logger?.LogDebug("OnDeleted: {path}", e.FullPath);
+            RaiseFileChanged(new FileChangedEventArgs(e.FullPath, e.Name, e.ChangeType));
+        }
+
+        private void OnRenamed(object sender, RenamedEventArgs e)
+        {
+            if (!ShouldProcess(e.FullPath)) return;
+            _logger?.LogDebug("OnRenamed: {old} -> {new}", e.OldFullPath, e.FullPath);
+            RaiseFileChanged(new FileChangedEventArgs(e.FullPath, e.Name, WatcherChangeTypes.Renamed));
+        }
+
+        private void OnError(object sender, ErrorEventArgs e)
+        {
+            _logger?.LogError(e.GetException(), "FileSystemWatcher internal error");
+            // Opcjonalnie: restart watcher, powiadomienie admina, itp.
+        }
+
+        public void Dispose()
+        {
+            _watcher.EnableRaisingEvents = false;
+            _watcher.Created -= OnCreated;
+            _watcher.Changed -= OnChanged;
+            _watcher.Deleted -= OnDeleted;
+            _watcher.Renamed -= OnRenamed;
+            _watcher.Error -= OnError;
+            _watcher.Dispose();
+        }
+    }
+}
+```
+
+---
+
+# 3. Klasa segregująca (tworzy `rok/miesiąc` i przenosi plik)
+
+Ta klasa subskrybuje `DirectoryObserver` i wykonuje segregację. Zawiera mechanizm próby otwarcia pliku (retry), obsługę konfliktów nazw i tworzenie katalogów.
+
+```csharp
+using System;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+
+namespace FileWatcherLib
+{
+    public class YearMonthSegregator : IDisposable
+    {
+        private readonly DirectoryObserver _observer;
+        private readonly string _baseDestination; // docelowy folder do segregacji
+        private readonly ILogger? _logger;
+
+        public YearMonthSegregator(DirectoryObserver observer, string baseDestination, ILogger? logger = null)
+        {
+            _observer = observer;
+            _baseDestination = baseDestination;
+            _logger = logger;
+
+            _observer.FileChanged += OnFileChanged;
+        }
+
+        private void OnFileChanged(object? sender, FileChangedEventArgs e)
+        {
+            // Chcemy reagować głównie na Created lub Renamed lub Changed (w zależności od potrzeb)
+            if (e.ChangeType == WatcherChangeTypes.Deleted) return;
+
+            // Wykonujemy asynchronicznie, aby nie blokować wątku watchera
+            _ = HandleFileAsync(e.FullPath);
+        }
+
+        private async Task HandleFileAsync(string fullPath)
+        {
+            try
+            {
+                // Czekamy na zakończenie zapisu pliku (retry/wait)
+                if (!await WaitForFileReadyAsync(fullPath, TimeSpan.FromSeconds(5)))
+                {
+                    _logger?.LogWarning("Plik {path} nie był gotowy do odczytu po upływie czasu.", fullPath);
+                    return;
+                }
+
+                // Pobierz datę pliku (np. LastWriteTimeUtc) i utwórz docelowe foldery rok/miesiąc
+                DateTime fileTimeUtc = File.GetLastWriteTimeUtc(fullPath);
+                if (fileTimeUtc == DateTime.MinValue)
+                    fileTimeUtc = DateTime.UtcNow;
+
+                string year = fileTimeUtc.Year.ToString("D4");
+                string month = fileTimeUtc.Month.ToString("D2");
+
+                string destDir = Path.Combine(_baseDestination, year, month);
+                Directory.CreateDirectory(destDir);
+
+                string fileName = Path.GetFileName(fullPath);
+                string destPath = Path.Combine(destDir, fileName);
+
+                destPath = GetNonConflictingPath(destPath);
+
+                // Przenieś plik
+                File.Move(fullPath, destPath);
+                _logger?.LogInformation("Przeniesiono {src} -> {dest}", fullPath, destPath);
+
+                // Opcjonalnie: wyślij dalsze zdarzenie / log / powiadomienie
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Błąd podczas segregacji pliku {path}", fullPath);
+            }
+        }
+
+        private static string GetNonConflictingPath(string path)
+        {
+            if (!File.Exists(path)) return path;
+
+            string dir = Path.GetDirectoryName(path)!;
+            string name = Path.GetFileNameWithoutExtension(path);
+            string ext = Path.GetExtension(path);
+
+            int i = 1;
+            string candidate;
+            do
+            {
+                candidate = Path.Combine(dir, $"{name} ({i}){ext}");
+                i++;
+            } while (File.Exists(candidate));
+
+            return candidate;
+        }
+
+        private static async Task<bool> WaitForFileReadyAsync(string path, TimeSpan timeout)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (sw.Elapsed < timeout)
+            {
+                try
+                {
+                    if (!File.Exists(path)) return false;
+                    // Otwórz do odczytu z FileShare.Read — jeśli uda się otworzyć, plik jest gotowy
+                    using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    {
+                        return true;
+                    }
+                }
+                catch (IOException)
+                {
+                    await Task.Delay(150);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    await Task.Delay(150);
+                }
+            }
+            return false;
+        }
+
+        public void Dispose()
+        {
+            _observer.FileChanged -= OnFileChanged;
+        }
+    }
+}
+```
+
+---
+
+# 4. Wysyłanie powiadomień do frontendu — SignalR (opcjonalnie)
+
+Jeśli chcesz przekazywać informację do interfejsu w czasie rzeczywistym, dodaj `SignalR` hub i zwołuj go w `YearMonthSegregator`. Poniżej minimalny hub i sposób wywołania.
+
+### Hub:
+
+```csharp
+using Microsoft.AspNetCore.SignalR;
+using System.Threading.Tasks;
+
+namespace FileWatcherApp
+{
+    public class FileEventsHub : Hub
+    {
+        // Możesz zostawić pusty lub dodać metody wywołane z klienta, jeśli potrzeba.
+    }
+}
+```
+
+### Modyfikacja `YearMonthSegregator` — wysyłanie po przeniesieniu
+
+Dodaj `IHubContext<FileEventsHub>` do konstruktora i wywołaj `Clients.All.SendAsync("FileSegregated", payload)` po udanym przeniesieniu. Przykład wywołania:
+
+```csharp
+// wewnątrz YearMonthSegregator
+private readonly IHubContext<FileEventsHub>? _hub;
+
+public YearMonthSegregator(DirectoryObserver observer, string baseDestination, IHubContext<FileEventsHub>? hub = null, ILogger? logger = null)
+{
+    _observer = observer;
+    _baseDestination = baseDestination;
+    _hub = hub;
+    _logger = logger;
+    _observer.FileChanged += OnFileChanged;
+}
+
+// po Move(...)
+await _hub?.Clients.All.SendAsync("FileSegregated", new {
+    Source = fullPath,
+    Destination = destPath,
+    Year = year,
+    Month = month,
+    TimestampUtc = DateTime.UtcNow
+});
+```
+
+Na froncie (JS SignalR) nasłuchujesz metody `"FileSegregated"`.
+
+---
+
+# 5. Przykład `Program.cs` — aplikacja konsolowa (minimalna)
+
+Użyj tego jeśli chcesz uruchomić jako prostą aplikację .NET (konsola) z logowaniem.
+
+```csharp
+using System;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using FileWatcherLib;
+
+class Program
+{
+    static Task Main(string[] args)
+    {
+        return Host.CreateDefaultBuilder(args)
+            .ConfigureLogging(l => l.SetMinimumLevel(LogLevel.Information))
+            .ConfigureServices((ctx, services) =>
+            {
+                // konfiguracja: obserwowany katalog i katalog docelowy
+                string watchPath = args.Length > 0 ? args[0] : ".";
+                string destPath = args.Length > 1 ? args[1] : Path.Combine(Directory.GetCurrentDirectory(), "segregated");
+
+                // Rejestrujemy DirectoryObserver ręcznie (nie jako hosted service)
+                services.AddSingleton<DirectoryObserver>(_ =>
+                    new DirectoryObserver(watchPath, "*.*", includeSubdirectories: false, logger: _.GetService<ILogger<DirectoryObserver>>()));
+
+                // YearMonthSegregator jako singleton
+                services.AddSingleton<YearMonthSegregator>(sp =>
+                {
+                    var obs = sp.GetRequiredService<DirectoryObserver>();
+                    var logger = sp.GetService<ILogger<YearMonthSegregator>>();
+                    return new YearMonthSegregator(obs, destPath, logger);
+                });
+            })
+            .RunConsoleAsync();
+    }
+}
+```
+
+Uruchamianie:
+
+```
+dotnet run -- "C:\watched\folder" "C:\segregated\folder"
+```
+
+---
+
+# 6. Testowanie i wskazówki praktyczne
+
+1. **Na czym reagować**: Najczęściej reagujemy na `Created` i `Renamed`; `Changed` czasem wyskakuje wielokrotnie podczas zapisu. Debounce w `DirectoryObserver` minimalizuje duplikaty.
+2. **Kiedy przenosić**: Przed przeniesieniem sprawdź, czy plik jest „gotowy” (funkcja `WaitForFileReadyAsync`). To zapobiega przenoszeniu plików, które są w trakcie zapisu i zablokowane.
+3. **Zdobądź datę pliku**: Używamy `File.GetLastWriteTimeUtc(fullPath)` aby zaklasyfikować go do `rok/miesiąc`. Możesz użyć `CreationTime` lub `DateTime.UtcNow` zależnie od wymagań.
+4. **Konflikty nazw**: `GetNonConflictingPath` dopisuje `(1)`, `(2)`, ... w razie kolizji.
+5. **IncludeSubdirectories**: Jeśli chcesz obserwować podkatalogi, ustaw `IncludeSubdirectories = true` w konstruktorze `DirectoryObserver`.
+6. **Błędy i restart**: `FileSystemWatcher` ma ograniczony bufor. Jeśli dostajesz `Error` z powodu overflow, możesz:
+
+   * zwiększyć monitorowanie (mniej szczegółowe filtry),
+   * obsłużyć restart watchera,
+   * albo użyć mechanizmu kolejkowania (np. zapisywać zdarzenia do kolejki i przetwarzać asynchronicznie).
+7. **Uprawnienia**: Upewnij się, że proces ma prawa zapisu/odczytu w obu lokalizacjach (watch i dest).
+8. **Test**: Uruchom aplikację, dodaj plik do monitorowanego katalogu, zmodyfikuj go, zmień nazwę. Sprawdź, czy plik pojawił się w `dest\YYYY\MM\`.
+9. **Integracja z frontem**: Dodaj SignalR lub HTTP callback w `YearMonthSegregator`, jeśli chcesz powiadamiać UI o przeniesieniu.
+
+---
+
+# 7. Najczęstsze pułapki i rozwiązania
+
+* *Wiele eventów dla jednego zapisu*: debounce + `WaitForFileReadyAsync`.
+* *Plik jest kopiowany i w trakcie kopiowania jest przenoszony → uszkodzony plik*: używaj retry/wait, albo kopiuj zawartość strumieniem i dopiero potem usuwaj źródło (safe copy).
+* *Overflow wewnętrznego bufora FileSystemWatcher*: jeśli spodziewasz się tysięcy zmian/sekundę, rozważ batchowanie (zapisywać zdarzenia w kolejce i przetwarzać wolniej), albo system-level rozwiązania (np. usługa oparta o inotify + kolejkę).
+* *File.Move rzuca wyjątki*: zawsze obsługuj wyjątki i zapewnij fallback (np. kopiuj+usuń).
+
+---
