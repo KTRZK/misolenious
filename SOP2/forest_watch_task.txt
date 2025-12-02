@@ -1,0 +1,167 @@
+Dobrze — poniżej masz **trzecie zadanie**, spójne pod względem wykorzystywanych mechanik (procesy potomne, sygnały, `siginfo_t`, `alarm`, lekkie handlery sygnałowe, losowe opóźnienia, zwracanie liczników przez `exit` lub zapis do pliku), ale całkowicie inną fabułą niż dotychczasowe dwa przykłady. Zadanie jest napisane tak, żeby można je było bez zmian zaimplementować używając Twojego kodu startowego (funkcje `bulk_write`, `sethandler`, `ms_sleep`, makro `ERR` itd.). Styl opisu jest prosty i „ludzki” — tak jak prosiłeś.
+
+---
+
+# Zadanie — Straż Leśna (Forest Watch)
+
+Program symuluje prosty system monitorowania pożarów w lesie. Proces-rodzic pełni rolę Centrum Sterowania, a `n` procesów potomnych to czujniki (watchers) rozlokowane w terenie. Czas symulacji to `t` sekund.
+
+## Zachowanie czujnika
+
+* Każdy czujnik (potomek) ma swój identyfikator (przekazany przez argument — cyfra 0..9) oraz losuje w KB rozmiar „pakietu zgłoszeniowego” `s` z przedziału 10..100 KB (potrzebne do etapów z zapisem plików).
+* Jeden czujnik jest zapalony (wykrył ognisko) na starcie — przyjmij, że to pierwszy z listy.
+* Gdy czujnik jest „aktywny” (wykrywa pożar), co losowy czas (50–200 ms) emituje alert: wysyła sygnał `SIGUSR1` do całej grupy (pozostałych czujników). (Symulacja rozprzestrzeniania alarmu.)
+* Gdy „zdrowy” czujnik (nieaktywny) otrzyma `SIGUSR1` od innego czujnika, ma prawdopodobieństwo `p`% na to, by sam zostać aktywny — wtedy zaczyna wysyłać sygnały w opisany sposób.
+* Po `k` sekundach od momentu, gdy czujnik stał się aktywny, przyjeżdżają ekipy ratunkowe i zabierają go — czujnik wtedy:
+
+  * wypisuje komunikat,
+  * kończy działanie zwracając w statusie liczbę wysłanych alertów (lub można zapisać tę liczbę do pliku `watcher_<PID>.txt` — wybierz jedną metodę; ocenianie uwzględnia exit status).
+* Po upływie `t` sekund Centrum Sterowania (rodzic) kończy symulację: wysyła `SIGTERM` do wszystkich czujników. Czujnik otrzymawszy `SIGTERM` kończy natychmiast i zwróci liczbę wysłanych alertów (jako kod zakończenia) — jeśli wcześniej został „odebrany” przez ekipę ratunkową, zakończył się wcześniej i nie ma już znaczenia.
+* Wszystkie komunikaty diagnostyczne (logi) i formaty są określone poniżej (ułatwiają ocenę automatyczną).
+
+## Argumenty programu
+
+Program uruchamia się z czterema argumentami:
+
+```
+./forest_watch t k n p
+```
+
+* `t` — czas symulacji (1..100) (sekundy)
+* `k` — czas po którym uczestnicy (ekipy) zabierają aktywny czujnik (1..100) (sekundy)
+* `n` — liczba czujników (1..30)
+* `p` — prawdopodobieństwo (w procentach 1..100), że czujnik po otrzymaniu alertu stanie się aktywny
+
+Przykład:
+
+```
+./forest_watch 10 3 5 20
+```
+
+(t = 10 s, k = 3 s, n = 5 czujników, p = 20%)
+
+## Wymagane komunikaty (dokładne formaty)
+
+Użyj poniższych sformatowanych komunikatów (dokładne napisy ułatwią automatyczne sprawdzenie):
+
+* Przy starcie czujnika:
+
+  ```
+  Watcher[{PID}] starts, id: {id}, initial_active: {0|1}
+  ```
+* Gdy aktywny czujnik emituje alert (poza handlerem, w bezpiecznym miejscu — wypisz numer wysłanych alertów):
+
+  ```
+  Watcher[{PID}] emitted alert (count: {x})
+  ```
+* Gdy czujnik otrzyma alert (w funkcji obsługi sygnału użyj siginfo_t i wypisz informację poza handlerem):
+
+  ```
+  Watcher[{PID}]: {SENDER_PID} sent alert!
+  ```
+* Gdy czujnik z powodu alertu zachoruje/aktywuje się (czyli zaczyna wysyłać alerty):
+
+  ```
+  Watcher[{PID}] activated!
+  ```
+* Gdy ekipa ratunkowa zabiera aktywny czujnik (po upływie `k` sekund od aktywacji):
+
+  ```
+  Watcher[{PID}] picked up after {x} alerts
+  ```
+* Gdy czujnik zamyka się po otrzymaniu SIGTERM (koniec symulacji):
+
+  ```
+  Watcher[{PID}] exits with {exit_code}
+  ```
+* Gdy Centrum Sterowania ustawia alarm:
+
+  ```
+  FC[{PID}]: Alarm set for {t} sec
+  ```
+* Gdy Centrum Sterowania kończy symulację:
+
+  ```
+  FC[{PID}]: Simulation ended
+  ```
+
+> Uwaga: `{PID}` i `{SENDER_PID}` to numery PID, `{id}` to przekazana cyfra 0..9, `{x}` to licznik alertów wysłanych przez danego czujnika, `{exit_code}` to kod zakończenia procesu (liczba wysłanych alertów lub inny uzgodniony kod).
+
+## Zachowanie sygnałowe i bezpieczeństwo
+
+* Funkcje obsługi sygnałów MUSZĄ być bardzo lekkie: w handlerach tylko operacje bezpieczne dla sygnałów (np. inkrementacja `volatile sig_atomic_t`, zapamiętanie `sender_pid` z `siginfo_t`), **bez** `malloc`, `printf`, `fopen`, `write` (chyba że jesteś świadomy, że `write` jest async-signal-safe i używasz go ostrożnie).
+* Użyj `sigaction` z flagą `SA_SIGINFO`, aby uzyskać `siginfo_t` (PID nadawcy).
+* Do wysyłania sygnału do całej grupy procesów używaj `kill(0, SIGUSR1)` z kontekstem grupy albo ustaw grupę procesów i użyj `killpg` (wg wskazówek prowadzącego).
+
+## Zwroty i pliki
+
+* Czujnik powinien zwrócić (exit code) liczbę alertów wysłanych (najlepiej ograniczoną do zakresu 0..255, lub zapisać pełną liczbę do pliku `watcher_<PID>.txt` i wyjść z kodem 0, jeśli liczba może przekraczać 255 — wybierz jedną metodę i dopisz do raportu).
+* Jeżeli zapisujesz plik, użyj niskopoziomowych wywołań (`open`, `bulk_write`, `close`) i zabezpiecz się przed partial writes poprzez `bulk_write`.
+
+## Przykład działania (fragm.) — ilustracja
+
+Uruchomienie:
+
+```
+./forest_watch 8 3 3 30
+```
+
+Możliwy przebieg (fragment):
+
+```
+Watcher[20001] starts, id: 2, initial_active: 1
+Watcher[20002] starts, id: 5, initial_active: 0
+Watcher[20003] starts, id: 1, initial_active: 0
+FC[20000]: Alarm set for 8 sec
+Watcher[20001] emitted alert (count: 1)
+Watcher[20002]: 20001 sent alert!
+Watcher[20003]: 20001 sent alert!
+Watcher[20003] activated!
+Watcher[20003] emitted alert (count: 1)
+Watcher[20002]: 20003 sent alert!
+Watcher[20002] activated!
+Watcher[20001] emitted alert (count: 2)
+Watcher[20001] picked up after 4 alerts
+Watcher[20001] exits with 4
+FC[20000]: Simulation ended
+Watcher[20003] exits with 2
+Watcher[20002] exits with 1
+```
+
+## Etapy oceniania (sugerowane — tak jak w poprzednich zadaniach)
+
+1. **Tworzenie procesów potomnych** — czujniki poprawnie startują i wypisują `Watcher[{PID}] starts...`. (3 pkt)
+2. **Emitowanie alertów przez aktywne czujniki** — aktywny czujnik co losowy czas wysyła `SIGUSR1` do grupy. (4 pkt)
+3. **Reagowanie na alerty i mechanizm aktywacji z prawdopodobieństwem `p`** — zdrowe czujniki z `p`% stają się aktywne. (5 pkt)
+4. **Odbiór aktywnych czujników po `k` sekundach** — od momentu aktywacji liczy się `k` i po tym czasie dany czujnik kończy działanie jako „odebrany” (exit z licznikiem). (4 pkt)
+5. **Zakończenie symulacji po czasie `t`** — rodzic wysyła `SIGTERM` do wszystkich i wypisuje `FC[{PID}]: Simulation ended`. Dzieci, które przetrwały, kończą z odpowiednim kodem. (4 pkt)
+6. **Bezpieczne zapisywanie wyników** — jeśli zapisujesz do pliku, używany jest `bulk_write` i obsługa partial writes. (2 pkt)
+
+## Wskazówki implementacyjne (co warto wykorzystać ze startowego kodu)
+
+* Użyj `sethandler` (albo Twojej wersji `sigaction`) aby ustawić handler `SIGUSR1` (z `SA_SIGINFO`) i `SIGTERM` w dzieciach oraz `SIGALRM` w rodzicu.
+* Użyj `ms_sleep` lub `nanosleep` do losowych przerw między kolejnymi alertami (50–200 ms).
+* Trzymaj licznik wysłanych alertów w zmiennej `int` w potomnym; handler tylko ustawia flagę/inkrementuje `volatile sig_atomic_t` i zapisuje `sender_pid` (jeśli potrzebujesz).
+* Do losowania: `srand(time(NULL) ^ getpid()); rand()`; do prawdopodobieństwa `p%` użyj `rand() % 100 < p`.
+* Przy odbiorze `SIGTERM` czujnik powinien bezpiecznie zamknąć zasoby i zwrócić kod równy liczbie alertów (albo zapisać plik).
+* Rodzic ustawia alarm `alarm(t)`, w handlerze `SIGALRM` wykonuje dystrybucję `SIGTERM` (lub wywołuje `killpg`), wypisuje komunikat i czeka na potomków.
+
+## Sugerowane nazwy funkcji (żeby ułatwić testowanie)
+
+* `int main(int argc, char **argv)` — parser i uruchomienie symulacji.
+* `pid_t *create_watchers(int n, int ids[], int *out_count)` — tworzy procesy potomne.
+* `void watcher_process(int id, int k, int p)` — logika czujnika.
+* `void fc_set_alarm_and_wait(int t, pid_t *children, int n)` — w rodzicu ustawia alarm i czeka.
+* `void sigusr1_watcher(int, siginfo_t*, void*)` — handler SIGUSR1 w potomnym (SA_SIGINFO).
+* `void sigterm_watcher(int)` — handler SIGTERM w potomnym.
+* `int write_result_file(pid_t pid, int alerts)` — (opcjonalnie) zapis wyniku do pliku `watcher_<PID>.txt` przy użyciu `bulk_write`.
+
+---
+
+Jeżeli chcesz, mogę:
+
+* napisać wzorcowy program `forest_watch.c` zgodny z tym poleceniem (z użyciem Twojego startowego kodu),
+* albo przygotować krótkie testy/skrypt sprawdzający poprawność (np. czy pliki wynikowe istnieją i czy exit-code odpowiada liczbie alertów),
+* albo dostosować komunikaty do innego formatu, jeśli to Ci bardziej pasuje.
+
+Którą opcję wybierasz?
