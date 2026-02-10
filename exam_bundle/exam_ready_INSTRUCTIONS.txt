@@ -1,0 +1,6 @@
+Exam bundle instructions (short):
+- Use Makefile: run `make` to compile all.
+- Test: run ./test_scripts.sh (make sure it's executable).
+- Key programs:
+  exam_count_simple, exam_nftw_count, copy_lowlevel, make_file, scanner_filters, sop-venv
+- Read util.h for helper functions and macros (ERR, TEMP_FAILURE_RETRY).
